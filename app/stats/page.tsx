@@ -1,13 +1,5 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import { Pie, PieChart } from "recharts";
-import {
-  ChartConfig,
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart";
+import StatsChart from '../../components/stats-chart';
+import { ChartConfig } from '@/components/ui/chart';
 
 interface Garment {
   type: string;
@@ -31,80 +23,40 @@ const generateChartConfig = (garmentTypes: string[]): ChartConfig => {
   return config;
 };
 
-export default function StatsPage() {
-  const [chartConfig, setChartConfig] = useState<ChartConfig>({});
-  const [chartData, setChartData] = useState<
-    { name: string; value: number; fill: string }[]
-  >([]);
+export default async function StatsPage() {
+  let chartConfig: ChartConfig = {};
+  let chartData: { name: string; value: number; fill: string }[] = [];
+  let error: string | null = null;
 
-  useEffect(() => {
-    const fetchWardrobeData = async () => {
-      try {
-        const response = await fetch("/wardrobe.json");
-        const data: Garment[] = await response.json();
+  try {
+    const response = await (await import('../api/wardrobe/route')).GET();
 
-        const garmentTypeCounts: { [key: string]: number } = {};
-        data.forEach((item) => {
-          garmentTypeCounts[item.type] = (garmentTypeCounts[item.type] || 0) + 1;
-        });
+    const data: Garment[] = await response.json();
 
-        const uniqueGarmentTypes = Object.keys(garmentTypeCounts);
-        const newChartConfig = generateChartConfig(uniqueGarmentTypes);
-        setChartConfig(newChartConfig);
+    const garmentTypeCounts: { [key: string]: number } = {};
+    data.forEach((item) => {
+      garmentTypeCounts[item.type] = (garmentTypeCounts[item.type] || 0) + 1;
+    });
 
-        const processedChartData = Object.entries(garmentTypeCounts).map(
-          ([name, value]) => ({
-            name,
-            value,
-            fill: newChartConfig[name]?.color || "hsl(var(--chart-1))", // Fallback color
-          })
-        );
-        setChartData(processedChartData);
-      } catch (error) {
-        console.error("Error fetching wardrobe data:", error);
-      }
-    };
+    const uniqueGarmentTypes = Object.keys(garmentTypeCounts);
+    chartConfig = generateChartConfig(uniqueGarmentTypes);
 
-    fetchWardrobeData();
-  }, []);
+    chartData = Object.entries(garmentTypeCounts).map(
+      ([name, value]) => ({
+        name,
+        value,
+        fill: chartConfig[name]?.color || "hsl(var(--chart-1))", // Fallback color
+      })
+    );
+  } catch (e: any) {
+    error = e.message;
+    console.error("Error fetching wardrobe data:", e);
+  }
+
+  if (error) return <div className="flex justify-center items-center min-h-screen text-red-500">Error: {error}</div>;
+  if (chartData.length === 0) return <div className="flex justify-center items-center min-h-screen">No wardrobe data found.</div>;
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4">
-      {chartData.length > 0 ? (
-        <ChartContainer config={chartConfig} className="min-h-[900px] min-w-[900px] mt-[-80px]">
-          <PieChart>
-            <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
-            <Pie
-              data={chartData}
-              dataKey="value"
-              nameKey="name"
-              innerRadius={50}
-              outerRadius={300}
-              strokeWidth={5}
-              label={({ name, value, percent, cx, cy, midAngle, outerRadius }) => {
-                const RADIAN = Math.PI / 180;
-                const radius = outerRadius * 1.2;
-                const x = cx + radius * Math.cos(-midAngle * RADIAN);
-                const y = cy + radius * Math.sin(-midAngle * RADIAN);
-                return (
-                  <text
-                    x={x}
-                    y={y}
-                    fill="black"
-                    textAnchor={x > cx ? 'start' : 'end'}
-                    dominantBaseline="central"
-                    style={{ fontSize: '16px' }}
-                  >
-                    {`${name} (${(percent * 100).toFixed(0)}%)`}
-                  </text>
-                );
-              }}
-            />
-          </PieChart>
-        </ChartContainer>
-      ) : (
-        <p>Loading wardrobe data...</p>
-      )}
-    </div>
+    <StatsChart chartConfig={chartConfig} chartData={chartData} />
   );
 }

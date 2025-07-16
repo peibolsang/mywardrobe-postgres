@@ -21,15 +21,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
         } as React.CSSProperties
       }
       {...props}
-      toastOptions={{
-        success: {
-          style: {
-            background: "var(--success-bg)",
-            color: "var(--success-text)",
-            borderColor: "var(--success-border)",
-          },
-        },
-      }}
+      toastOptions={{}}
     />
   )
 }
