@@ -95,9 +95,14 @@
       "features": {
         "type": "string",
         "description": "A brief textual description of the garment, summarizing its key features and potential uses."
+      },
+      "id": {
+        "type": "integer",
+        "description": "A unique numeric identifier for the garment."
       }
     },
     "required": [
+      "id",
       "file_name",
       "model",
       "brand",

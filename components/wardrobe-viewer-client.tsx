@@ -9,6 +9,7 @@ import { FiFilter } from 'react-icons/fi';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
 
 interface Garment {
+  id: number;
   file_name: string;
   model: string;
   brand: string;
@@ -215,14 +216,17 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
             <Card key={garment.file_name} className="flex flex-col items-center text-center">
               <CardContent className="flex flex-col items-center text-center">
                 <div className="flex flex-col items-center justify-start p-4">
-                  <Image
-                    key={garment.file_name}
-                    src={garment.file_name}
-                    alt={garment.model}
-                    width={400}
-                    height={400}
-                    objectFit="contain"
-                  />
+                  <Link href={`/garments/${garment.id}`} scroll={false}>
+                    <Image
+                      key={garment.file_name}
+                      src={garment.file_name}
+                      alt={garment.model}
+                      width={400}
+                      height={400}
+                      objectFit="contain"
+                      className="cursor-pointer"
+                    />
+                  </Link>
                 </div>
                 <p className="text-sm text-gray-600">{garment.model} {garment.type} by {garment.brand}</p>
               </CardContent>
