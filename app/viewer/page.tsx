@@ -46,6 +46,40 @@ interface AvailableFilters {
   material: AvailableFilterOption[];
 }
 
+const emojiMap: { [key: string]: string } = {
+  "Sweatshirt": "👕",
+  "Shorts": "🩳",
+  "Sneakers": "👟",
+  "Loafers": "👞",
+  "Selvedge Jeans": "👖",
+  "Shirt": "👔",
+  "Jeans": "👖",
+  "Pants": "👖",
+  "Polo Shirt": "👕",
+  "T-shirt": "👕",
+  "Blazer": "🧥",
+  "Jacket": "🧥",
+};
+
+const colorMap: { [key: string]: string } = {
+  "blue chambray": "#A7BCCB",
+  "blue denim": "#3B5B7D",
+  "bone": "#E0D8C7",
+  "charcoal": "#36454F",
+  "corduroy": "#625741", // A typical corduroy brown
+  "dark brown": "#654321",
+  "gum": "#8A7B6B",
+  "heather grey": "#B0B0B0",
+  "medium wash blue": "#5D8AA8",
+  "off-white": "#F5F5DC",
+  "olive green": "#6B8E23",
+  "raw indigo": "#3F4B6B",
+  "russet": "#80461B",
+  "sage green": "#9DC183",
+  "washed grey": "#A8A8A8",
+  // Add any other non-standard colors here
+};
+
 export default function WardrobeViewerPage() {
   const [wardrobeData, setWardrobeData] = useState<Garment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -229,7 +263,18 @@ export default function WardrobeViewerPage() {
                       onClick={() => handleFilterChange(category as keyof Filters, filterOption.value)}
                       className="justify-between"
                     >
-                      <span>{filterOption.value}</span>
+                      <span>
+                        {category === 'color_palette' && (
+                          <div
+                            className="inline-block w-4 h-4 rounded-full mr-2 border border-gray-300"
+                            style={{ backgroundColor: colorMap[filterOption.value] || filterOption.value.toLowerCase().replace(/ /g, '') }}
+                          />
+                        )}
+                        {category === 'type' && emojiMap[filterOption.value] && (
+                          <span className="mr-2">{emojiMap[filterOption.value]}</span>
+                        )}
+                        {filterOption.value}
+                      </span>
                       <span className="ml-2 text-gray-500">({filterOption.count})</span>
                     </Button>
                   ))}

@@ -1,0 +1,117 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "file_name": {
+        "type": "string",
+        "description": "The original filename of the garment image (e.g., 'blue_t-shirt.png')."
+      },
+      "model": {
+        "type": "string",
+        "description": "The specific model of the garment for its given type (e.g., 'Type 1 trucker jacket' for a denim jacket, 'Storm Rider' for a Lee jacket, 'Crew Neck' for a t-shirt)."
+      },
+      "brand": {
+        "type": "string",
+        "description": "The brand of the garment (e.g., 'Nike', 'Zara', 'Levi's')."
+      },
+      "type": {
+        "type": "string",
+        "description": "The general type of garment (e.g., 'dress', 'shirt', 'pants', 'jacket')."
+      },
+      "style": {
+        "type": "string",
+        "description": "The aesthetic style of the garment (e.g., 'casual', 'formal', 'sporty', 'vintage', 'bohemian').",
+        "enum": ["casual", "sporty", "minimalist", "preppy", "mod", "workwear", "outdoorsy", "vintage", "smart casual", "western", "classic"]
+      },
+      "formality": {
+        "type": "string",
+        "description": "The level of formality of the garment (e.g., 'informal', 'business casual', 'semi-formal', 'formal').",
+        "enum": ["informal", "business casual", "semi-formal", "formal"]
+      },
+      "material_composition": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "material": {
+              "type": "string",
+              "description": "The name of the material (e.g., 'cotton', 'wool', 'lyocell', 'polyester')."
+            },
+            "percentage": {
+              "type": "integer",
+              "description": "The percentage of this material in the garment must be between 0 and 100."
+            }
+          },
+          "required": ["material", "percentage"]
+        },
+        "description": "A detailed breakdown of the garment's material composition, with percentages for each material. The sum of percentages should be 100%."
+      },
+      "color_palette": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["beige", "black", "blue", "blue chambray", "blue denim", "bone", "brown", "charcoal", "corduroy", "dark brown", "dark indigo", "green", "grey", "gum", "heather grey", "khaki", "light grey", "medium wash blue", "off-white", "olive green", "raw indigo", "russet", "sage green", "tan", "washed grey", "white", "yellow"]
+        },
+        "description": "An array of dominant colors or color patterns in the garment (e.g., ['blue', 'white'], ['black'], ['floral print'])."
+      },
+      "warmth_level": {
+        "type": "string",
+        "description": "The warmth provided by the garment (e.g., 'very light', 'light', 'medium', 'warm', 'very warm').",
+        "enum": ["very light", "light", "medium", "warm", "very warm"]
+      },
+      "suitable_weather": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["all season", "cold", "cool", "hot", "mild", "warm"]
+        },
+        "description": "An array of weather conditions for which the garment is suitable (e.g., ['warm', 'mild', 'hot', 'cool', 'cold', 'rainy', 'snowy'])."
+      },
+      "suitable_time_of_day": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["all day"]
+        },
+        "description": "An array of times of day for which the garment is suitable (e.g., ['morning', 'afternoon', 'evening', 'night', 'all day'])."
+      },
+      "suitable_places": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["bar", "beach", "cabin", "city", "concert", "country club", "countryside", "golf course", "gym", "mountains", "office", "outdoors", "park", "pub", "ranch", "resort", "restaurant", "skatepark", "tennis court", "travel", "work from home", "workshop"]
+        },
+        "description": "An array of places or environments where the garment would be appropriate (e.g., 'work from home', 'office', 'church', 'restaurant', 'park', 'gym', 'beach', 'city', 'countryside')."
+      },
+      "suitable_occasions": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["beach", "brunch", "camping", "casual gathering", "city walk", "concert", "country fair", "daily life", "date night", "exercise", "golf", "hiking", "horseback riding", "manual labor", "night out", "travel", "vacation", "wedding", "work"]
+        },
+        "description": "An array of occasions for which the garment is suitable (e.g., 'daily life', 'work', 'family walk', 'city walk', 'formal event', 'casual gathering', 'exercise', 'party', 'travel')."
+      },
+      "features": {
+        "type": "string",
+        "description": "A brief textual description of the garment, summarizing its key features and potential uses."
+      }
+    },
+    "required": [
+      "file_name",
+      "model",
+      "brand",
+      "type",
+      "style",
+      "formality",
+      "material_composition",
+      "color_palette",
+      "warmth_level",
+      "suitable_weather",
+      "suitable_time_of_day",
+      "suitable_places",
+      "suitable_occasions",
+      "features"
+    ]
+  }
+}
