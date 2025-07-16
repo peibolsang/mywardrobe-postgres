@@ -228,7 +228,9 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
                     />
                   </Link>
                 </div>
-                <p className="text-sm text-gray-600">{garment.model} {garment.type} by {garment.brand}</p>
+                <a href={`/garments/${garment.id}`} className="text-sm text-gray-600 hover:underline cursor-pointer">
+                  <p>{garment.model} {garment.type} by {garment.brand}</p>
+                </a>
               </CardContent>
             </Card>
           ))}
