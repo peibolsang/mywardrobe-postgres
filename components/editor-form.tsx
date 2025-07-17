@@ -21,6 +21,7 @@ interface MaterialComposition {
 }
 
 interface Garment {
+  id: number;
   file_name: string;
   model: string;
   brand: string;
@@ -68,22 +69,26 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
   const [isNewGarmentMode, setIsNewGarmentMode] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
 
-  const initializeNewGarment = (): Garment => ({
-    file_name: '', // Will be generated or handled later
-    model: '',
-    brand: '',
-    type: '',
-    style: '',
-    formality: '',
-    material_composition: [],
-    color_palette: [],
-    warmth_level: '',
-    suitable_weather: [],
-    suitable_time_of_day: [],
-    suitable_places: [],
-    suitable_occasions: [],
-    features: '',
-  });
+  const initializeNewGarment = (): Garment => {
+    const nextId = wardrobeData.length > 0 ? Math.max(...wardrobeData.map(g => g.id)) + 1 : 1;
+    return {
+      id: nextId,
+      file_name: '', // Will be generated or handled later
+      model: '',
+      brand: '',
+      type: '',
+      style: '',
+      formality: '',
+      material_composition: [],
+      color_palette: [],
+      warmth_level: '',
+      suitable_weather: [],
+      suitable_time_of_day: [],
+      suitable_places: [],
+      suitable_occasions: [],
+      features: '',
+    };
+  };
 
   useEffect(() => {
     if (wardrobeData.length > 0 && !isNewGarmentMode) {
