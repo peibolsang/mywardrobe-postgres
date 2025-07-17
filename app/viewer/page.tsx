@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import WardrobeViewerClient from '../../components/wardrobe-viewer-client';
 
 interface Garment {
@@ -115,6 +116,8 @@ export default async function WardrobeViewerPage() {
   if (wardrobeData.length === 0) return <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4 relative">No wardrobe items found.</div>;
 
   return (
-    <WardrobeViewerClient initialWardrobeData={wardrobeData} initialAvailableFilters={availableFilters} />
+    <Suspense fallback={<div>Loading filters...</div>}>
+      <WardrobeViewerClient initialWardrobeData={wardrobeData} initialAvailableFilters={availableFilters} />
+    </Suspense>
   );
 }

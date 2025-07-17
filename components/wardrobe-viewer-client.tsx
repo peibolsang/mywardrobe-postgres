@@ -91,6 +91,7 @@ const colorMap: { [key: string]: string } = {
 export default function WardrobeViewerClient({ initialWardrobeData, initialAvailableFilters }: WardrobeViewerClientProps) {
   const [wardrobeData, setWardrobeData] = useState<Garment[]>(initialWardrobeData);
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -107,15 +108,21 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
     return { filters, favorites };
   }, [searchParams]);
 
-  const [selectedFilters, setSelectedFilters] = useState<Filters>(getFiltersFromUrl().filters);
-  const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(getFiltersFromUrl().favorites);
+  const [selectedFilters, setSelectedFilters] = useState<Filters>(mounted ? getFiltersFromUrl().filters : { brand: [], type: [], color_palette: [], style: [], material: [] });
+  const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(mounted ? getFiltersFromUrl().favorites : false);
   const [availableFilters, setAvailableFilters] = useState<AvailableFilters>(initialAvailableFilters);
 
   useEffect(() => {
-    const { filters, favorites } = getFiltersFromUrl();
-    setSelectedFilters(filters);
-    setShowOnlyFavorites(favorites);
-  }, [searchParams, getFiltersFromUrl]);
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (mounted) {
+      const { filters, favorites } = getFiltersFromUrl();
+      setSelectedFilters(filters);
+      setShowOnlyFavorites(favorites);
+    }
+  }, [searchParams, getFiltersFromUrl, mounted]);
 
   const toggleFilterDrawer = () => {
     setIsFilterDrawerOpen(!isFilterDrawerOpen);
