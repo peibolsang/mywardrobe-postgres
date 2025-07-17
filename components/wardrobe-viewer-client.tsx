@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -90,51 +91,72 @@ const colorMap: { [key: string]: string } = {
 export default function WardrobeViewerClient({ initialWardrobeData, initialAvailableFilters }: WardrobeViewerClientProps) {
   const [wardrobeData, setWardrobeData] = useState<Garment[]>(initialWardrobeData);
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
-  const [showOnlyFavorites, setShowOnlyFavorites] = useState(false);
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const getFiltersFromUrl = useCallback(() => {
+    const filters: Filters = {
+      brand: searchParams.get('brand')?.split(',').filter(Boolean) || [],
+      type: searchParams.get('type')?.split(',').filter(Boolean) || [],
+      color_palette: searchParams.get('color_palette')?.split(',').filter(Boolean) || [],
+      style: searchParams.get('style')?.split(',').filter(Boolean) || [],
+      material: searchParams.get('material')?.split(',').filter(Boolean) || [],
+    };
+    const favorites = searchParams.get('favorites') === 'true';
+    return { filters, favorites };
+  }, [searchParams]);
+
+  const [selectedFilters, setSelectedFilters] = useState<Filters>(getFiltersFromUrl().filters);
+  const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(getFiltersFromUrl().favorites);
+  const [availableFilters, setAvailableFilters] = useState<AvailableFilters>(initialAvailableFilters);
+
+  useEffect(() => {
+    const { filters, favorites } = getFiltersFromUrl();
+    setSelectedFilters(filters);
+    setShowOnlyFavorites(favorites);
+  }, [searchParams, getFiltersFromUrl]);
 
   const toggleFilterDrawer = () => {
     setIsFilterDrawerOpen(!isFilterDrawerOpen);
   };
 
+  const updateUrl = (newFilters: Filters, newFavorites: boolean) => {
+    const newSearchParams = new URLSearchParams();
+    Object.entries(newFilters).forEach(([key, value]) => {
+      if (value.length > 0) {
+        newSearchParams.set(key, value.join(','));
+      }
+    });
+    if (newFavorites) {
+      newSearchParams.set('favorites', 'true');
+    }
+    router.push(`?${newSearchParams.toString()}`);
+  };
+
   const toggleShowOnlyFavorites = () => {
-    setShowOnlyFavorites(!showOnlyFavorites);
+    updateUrl(selectedFilters, !showOnlyFavorites);
   };
 
   const handleClearFilters = () => {
-    setSelectedFilters({
-      brand: [],
-      type: [],
-      color_palette: [],
-      style: [],
-      material: [],
-    });
+    updateUrl({ brand: [], type: [], color_palette: [], style: [], material: [] }, false);
   };
-  const [selectedFilters, setSelectedFilters] = useState<Filters>({
-    brand: [],
-    type: [],
-    color_palette: [],
-    style: [],
-    material: [],
-  });
-  const [availableFilters, setAvailableFilters] = useState<AvailableFilters>(initialAvailableFilters);
 
   const handleFilterChange = (category: keyof Filters, value: string) => {
-    setSelectedFilters(prevFilters => {
-      const currentCategoryFilters = prevFilters[category];
-      if (currentCategoryFilters.includes(value)) {
-        // Remove filter
-        return {
-          ...prevFilters,
-          [category]: currentCategoryFilters.filter(item => item !== value),
-        };
-      } else {
-        // Add filter
-        return {
-          ...prevFilters,
-          [category]: [...currentCategoryFilters, value],
-        };
-      }
-    });
+    const currentCategoryFilters = selectedFilters[category];
+    let newCategoryFilters: string[];
+
+    if (currentCategoryFilters.includes(value)) {
+      newCategoryFilters = currentCategoryFilters.filter(item => item !== value);
+    } else {
+      newCategoryFilters = [...currentCategoryFilters, value];
+    }
+
+    const newFilters = {
+      ...selectedFilters,
+      [category]: newCategoryFilters,
+    };
+    updateUrl(newFilters, showOnlyFavorites);
   };
 
   const filteredWardrobe = useMemo(() => {
