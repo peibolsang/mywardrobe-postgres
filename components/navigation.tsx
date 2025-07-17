@@ -28,7 +28,7 @@ export function Navigation() {
               <span
                 className={cn(
                   "px-4 py-2 text-lg font-medium transition-colors relative",
-                  mounted && pathname === href
+                  mounted && (pathname === href || (href === "/viewer" && pathname.startsWith("/garments")))
                     ? "text-primary after:content-[''] after:absolute after:left-0 after:bottom-[-2px] after:w-full after:h-[2px] after:bg-primary"
                     : "text-muted-foreground hover:text-primary"
                 )}

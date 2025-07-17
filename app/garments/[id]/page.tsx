@@ -1,5 +1,5 @@
-"use client";
-
+'use client';
+import Link from 'next/link';
 import React, { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -93,7 +93,12 @@ export default function GarmentPage({ params: paramsPromise }: { params: Promise
   const schemaProperties = schemaData.items.properties;
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-100 flex flex-col items-center p-4">
+       <div className="w-full max-w-5xl mb-4">
+        <Link href="/viewer" className="text-blue-500 hover:underline">
+          &larr; Back to My Wardrobe
+        </Link>
+      </div>
       <Card className="w-full max-w-5xl">
         <CardHeader>
           <CardTitle className="text-center text-2xl">{garment.model} {garment.type}, by {garment.brand}</CardTitle>
