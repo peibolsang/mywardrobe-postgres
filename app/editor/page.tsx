@@ -6,6 +6,7 @@ interface MaterialComposition {
 }
 
 interface Garment {
+  id: number;
   file_name: string;
   model: string;
   brand: string;
@@ -20,6 +21,7 @@ interface Garment {
   suitable_places: string[];
   suitable_occasions: string[];
   features: string;
+  favorite?: boolean;
 }
 
 interface SchemaProperty {

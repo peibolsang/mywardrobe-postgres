@@ -16,6 +16,7 @@ interface Garment {
   suitable_places: string[];
   suitable_occasions: string[];
   features: string;
+  favorite?: boolean;
 }
 
 interface AvailableFilterOption {

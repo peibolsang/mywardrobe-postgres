@@ -21,6 +21,7 @@ interface Garment {
   suitable_places: string[];
   suitable_occasions: string[];
   features: string;
+  favorite?: boolean;
 }
 
 export default function GarmentModal({ params: paramsPromise }: { params: Promise<{ id: string }> }) {

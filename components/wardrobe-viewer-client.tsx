@@ -5,7 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
-import { FiFilter } from 'react-icons/fi';
+import { FiFilter, FiHeart } from 'react-icons/fi';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
 
 interface Garment {
@@ -24,6 +24,7 @@ interface Garment {
   suitable_places: string[];
   suitable_occasions: string[];
   features: string;
+  favorite?: boolean;
 }
 
 interface Filters {
@@ -89,9 +90,14 @@ const colorMap: { [key: string]: string } = {
 export default function WardrobeViewerClient({ initialWardrobeData, initialAvailableFilters }: WardrobeViewerClientProps) {
   const [wardrobeData, setWardrobeData] = useState<Garment[]>(initialWardrobeData);
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
+  const [showOnlyFavorites, setShowOnlyFavorites] = useState(false);
 
   const toggleFilterDrawer = () => {
     setIsFilterDrawerOpen(!isFilterDrawerOpen);
+  };
+
+  const toggleShowOnlyFavorites = () => {
+    setShowOnlyFavorites(!showOnlyFavorites);
   };
 
   const handleClearFilters = () => {
@@ -132,11 +138,17 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
   };
 
   const filteredWardrobe = useMemo(() => {
-    if (selectedFilters.brand.length === 0 && selectedFilters.type.length === 0 && selectedFilters.color_palette.length === 0 && selectedFilters.style.length === 0 && selectedFilters.material.length === 0) {
-      return wardrobeData;
+    let wardrobe = wardrobeData;
+
+    if (showOnlyFavorites) {
+      wardrobe = wardrobe.filter(garment => garment.favorite);
     }
 
-    return wardrobeData.filter(garment => {
+    if (selectedFilters.brand.length === 0 && selectedFilters.type.length === 0 && selectedFilters.color_palette.length === 0 && selectedFilters.style.length === 0 && selectedFilters.material.length === 0) {
+      return wardrobe;
+    }
+
+    return wardrobe.filter(garment => {
       const matchesBrand = selectedFilters.brand.length === 0 || selectedFilters.brand.includes(garment.brand);
       const matchesType = selectedFilters.type.length === 0 || selectedFilters.type.includes(garment.type);
       const matchesColor = selectedFilters.color_palette.length === 0 || selectedFilters.color_palette.some(color => garment.color_palette.includes(color));
@@ -144,7 +156,7 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
       const matchesMaterial = selectedFilters.material.length === 0 || selectedFilters.material.some(material => garment.material_composition.some(mc => mc.material === material));
       return matchesBrand && matchesType && matchesColor && matchesStyle && matchesMaterial;
     });
-  }, [wardrobeData, selectedFilters]);
+  }, [wardrobeData, selectedFilters, showOnlyFavorites]);
 
   const isAnyFilterSelected = useMemo(() => {
     return Object.values(selectedFilters).some(filterArray => filterArray.length > 0);
@@ -208,12 +220,18 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
           <Button variant="outline" onClick={toggleFilterDrawer}>
             <FiFilter />
           </Button>
+          <Button variant="outline" onClick={toggleShowOnlyFavorites} className="ml-2">
+            <FiHeart fill={showOnlyFavorites ? 'red' : 'none'} />
+          </Button>
         </div>
         
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-6 w-full max-w-6xl">
           {filteredWardrobe.map((garment) => (
-            <Card key={garment.file_name} className="flex flex-col items-center text-center">
+            <Card key={garment.file_name} className="flex flex-col items-center text-center relative">
+              {garment.favorite && (
+                <FiHeart fill="red" className="absolute top-4 right-4 text-red-500" />
+              )}
               <CardContent className="flex flex-col items-center text-center">
                 <div className="flex flex-col items-center justify-start p-4">
                   <Link href={`/garments/${garment.id}`} scroll={false}>

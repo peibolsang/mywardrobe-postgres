@@ -1,5 +1,6 @@
 "use client";
 
+import { FiHeart } from 'react-icons/fi';
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { Toaster } from '../components/ui/sonner';
@@ -36,6 +37,7 @@ interface Garment {
   suitable_places: string[];
   suitable_occasions: string[];
   features: string;
+  favorite?: boolean;
 }
 
 interface SchemaProperty {
@@ -176,6 +178,30 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
       );
       return { ...prevData, material_composition: newMaterialComposition };
     });
+  };
+
+  const handleToggleFavorite = async (garmentId: number) => {
+    const updatedWardrobeData = wardrobeData.map(garment =>
+      garment.id === garmentId ? { ...garment, favorite: !garment.favorite } : garment
+    );
+
+    try {
+      const res = await fetch('/api/update-wardrobe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updatedWardrobeData),
+      });
+
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+
+      setWardrobeData(updatedWardrobeData);
+      toast.success('Favorite status updated!');
+    } catch (e: any) {
+      console.error('Error updating favorite status:', e);
+      toast.error(`Failed to update favorite status: ${e.message}`);
+    }
   };
 
   const handleSave = async () => {
@@ -456,7 +482,17 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
       )}
 
       {currentGarment && schemaProperties && (
-        <Card className="w-full max-w-5xl">
+        <Card className="w-full max-w-5xl relative">
+          {!isNewGarmentMode && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute top-4 right-4 text-gray-400 hover:text-red-500"
+              onClick={() => handleToggleFavorite(currentGarment.id)}
+            >
+              <FiHeart fill={currentGarment.favorite ? 'red' : 'none'} />
+            </Button>
+          )}
           <CardHeader>
             <CardTitle className="text-center text-2xl">{currentGarment.model} {currentGarment.type}, by {currentGarment.brand}</CardTitle>
           </CardHeader>

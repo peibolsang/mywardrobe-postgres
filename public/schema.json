@@ -99,6 +99,10 @@
       "id": {
         "type": "integer",
         "description": "A unique numeric identifier for the garment."
+      },
+      "favorite": {
+        "type": "boolean",
+        "description": "Whether the garment is a favorite."
       }
     },
     "required": [

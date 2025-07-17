@@ -39,8 +39,9 @@
       "travel",
       "golf"
     ],
-    "features": "This awesome sweatshirt represents the perfect combination of essential style and authentic sports heritage. Part of the exclusive Reverse Weave collection, it's crafted from prized Champion brushed fleece, a soft and durable fabric created with the brand's Reverse Weave technology introduced in 1934, which prevents shrinkage and deformation over time. Carefully crafted down to every detail and finished with the iconic C logo patch on the sleeve, it fully embodies Champion's authentic and timeless DNA indeed.",
-    "id": 1
+    "features": "This sweatshirt represents the perfect combination of essential style and authentic sports heritage. Part of the exclusive Reverse Weave collection, it's crafted from prized Champion brushed fleece, a soft and durable fabric created with the brand's Reverse Weave technology introduced in 1934, which prevents shrinkage and deformation over time. Carefully crafted down to every detail and finished with the iconic C logo patch on the sleeve, it fully embodies Champion's authentic and timeless DNA indeed.",
+    "id": 1,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 10_16_13 PM.png",
@@ -227,7 +228,8 @@
       "country fair"
     ],
     "features": "Off-white fatigue shorts from Massimo Dutti. Made from a cotton-linen blend, these shorts feature large front pockets and a clean, classic look. Super-versatile in summer time.",
-    "id": 5
+    "id": 5,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 07_18_37 PM.png",
@@ -628,7 +630,8 @@
       "work"
     ],
     "features": "Adidas Centennial C85 ADV Low sneakers in a grey suede with a gum sole. A classic skateboarding shoe that has become a streetwear staple.",
-    "id": 13
+    "id": 13,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 07_07_18 PM.png",
@@ -724,7 +727,8 @@
       "work"
     ],
     "features": "Reebok Club C 85 vintage sneakers in off-white. A classic tennis shoe that has a timeless, vintage appeal.",
-    "id": 15
+    "id": 15,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 06_21_46 PM.png",
@@ -775,7 +779,8 @@
       "work"
     ],
     "features": "Levi's 501 selvedge jeans in a classic medium wash with premium cotton. The original blue jean, a timeless and versatile wardrobe staple.",
-    "id": 16
+    "id": 16,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 06_25_56 PM.png",
@@ -823,7 +828,8 @@
       "work"
     ],
     "features": "This new cut from the California-based crowdfunded denim maker is based on a pre-50s style — straight in the leg with a fuller thigh, higher rise, and roomy top block. Whether you want a more sophisticated look in the growing swathe of baggy denim options or think of these as a more relaxed silhouette to give your slim jeans a breather, they are the pinch hitter in any lineup.",
-    "id": 17
+    "id": 17,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 16, 2025, 12_27_02 AM.png",
@@ -1488,7 +1494,8 @@
       "work"
     ],
     "features": "Zara johnny collar polo in black. A retro-inspired polo with an open, buttonless placket for a relaxed yet sophisticated look.",
-    "id": 31
+    "id": 31,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 05_17_32 PM.png",
@@ -1535,7 +1542,8 @@
       "vacation"
     ],
     "features": "Zara Origins crew neck t-shirt in black. A high-quality basic t-shirt with a clean, minimalist design.",
-    "id": 32
+    "id": 32,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 05_23_20 PM.png",
@@ -1662,7 +1670,8 @@
       "travel"
     ],
     "features": "Zara Origins heayweight crew neck t-shirt in heather grey. A high-quality and ethically made basic t-shirt.",
-    "id": 35
+    "id": 35,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 05_41_55 PM.png",
@@ -1832,7 +1841,8 @@
       "manual labor"
     ],
     "features": "Whitesville longstaple cotton loopwheeled crew neck t-shirt in white. A durable and substantial high-quality t-shirt, made in Japan",
-    "id": 39
+    "id": 39,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 05_09_03 PM.png",
@@ -2624,7 +2634,8 @@
       "work"
     ],
     "features": "Levi's Type I trucker jacket in raw indigo denim. A reproduction of a classic 1936 denim jacket with a boxy fit and two chest pockets.",
-    "id": 57
+    "id": 57,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 02_56_36 PM.png",
@@ -2677,7 +2688,8 @@
       "work"
     ],
     "features": "Levi's Type III trucker jacket in a medium wash blue. The iconic denim jacket, a versatile and timeless wardrobe staple.",
-    "id": 58
+    "id": 58,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 03_02_33 PM.png",
@@ -2726,7 +2738,8 @@
       "work"
     ],
     "features": "Lee Storm Rider jacket by Paul Smith in raw indigo denim with a corduroy collar and blanket lining. A classic western jacket that is both stylish and warm. A unique piece.",
-    "id": 59
+    "id": 59,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 03_11_06 PM.png",
@@ -2815,7 +2828,8 @@
       "date night"
     ],
     "features": "Mango denim chore coat in washed grey denim. A minimalist and modern take on a classic workwear jacket.",
-    "id": 61
+    "id": 61,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 02_37_32 PM.png",
@@ -2855,7 +2869,8 @@
       "manual labor"
     ],
     "features": "Carhartt Detroit jacket in hamilton brown. A classic and durable workwear jacket with a blanket lining and corduroy collar.",
-    "id": 62
+    "id": 62,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 02_37_45 PM.png",
@@ -2899,7 +2914,8 @@
       "manual labor"
     ],
     "features": "Carhartt WIP Detroit jacket in black. A modern and stylish take on the classic workwear jacket.",
-    "id": 63
+    "id": 63,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 02_37_55 PM.png",
@@ -2993,7 +3009,8 @@
       "travel"
     ],
     "features": "Merz B. Schwanen 1940s 5.5oz long-staple cotton loopwheeled crew neck t-shirt in white. A super-high quality t-shirt made in Germany",
-    "id": 65
+    "id": 65,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 14, 2025, 02_43_08 PM.png",
@@ -3034,7 +3051,8 @@
       "manual labor"
     ],
     "features": "Merz B. Schwanen 1950s 5.5oz long-staple cotton loopwheeled crew neck t-shirt in white. A super-high quality t-shirt made in Germany",
-    "id": 66
+    "id": 66,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 16, 2025, 11_54_49 AM.png",
@@ -3088,7 +3106,8 @@
       "work"
     ],
     "features": "Zara heavyweight off-white crew neck. Boxy style, almost vintage. Fits super-well",
-    "id": 67
+    "id": 67,
+    "favorite": true
   },
   {
     "file_name": "/ChatGPT Image Jul 16, 2025, 02_26_01 PM.png",

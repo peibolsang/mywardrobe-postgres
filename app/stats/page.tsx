@@ -2,8 +2,22 @@ import StatsChart from '../../components/stats-chart';
 import { ChartConfig } from '@/components/ui/chart';
 
 interface Garment {
+  id: number;
+  file_name: string;
+  model: string;
+  brand: string;
   type: string;
-  // ... other properties
+  style: string;
+  formality: string;
+  material_composition: any[]; // Simplified for stats
+  color_palette: string[];
+  warmth_level: string;
+  suitable_weather: string[];
+  suitable_time_of_day: string[];
+  suitable_places: string[];
+  suitable_occasions: string[];
+  features: string;
+  favorite?: boolean;
 }
 
 const generateChartConfig = (garmentTypes: string[]): ChartConfig => {
