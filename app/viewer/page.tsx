@@ -1,6 +1,7 @@
 import WardrobeViewerClient from '../../components/wardrobe-viewer-client';
 
 interface Garment {
+  id: number;
   file_name: string;
   model: string;
   brand: string;
