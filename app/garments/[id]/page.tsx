@@ -1,4 +1,5 @@
 'use client';
+import { FiHeart } from 'react-icons/fi';
 import Link from 'next/link';
 import React, { useEffect, useState } from 'react';
 import Image from 'next/image';
@@ -100,7 +101,10 @@ export default function GarmentPage({ params: paramsPromise }: { params: Promise
           &larr; Back to My Wardrobe
         </Link>
       </div>
-      <Card className="w-full max-w-5xl">
+      <Card className="w-full max-w-5xl relative">
+        {garment.favorite && (
+          <FiHeart fill="red" className="absolute top-4 right-4 text-red-500 text-2xl" />
+        )}
         <CardHeader>
           <CardTitle className="text-center text-2xl">{garment.model} {garment.type}, by {garment.brand}</CardTitle>
         </CardHeader>
