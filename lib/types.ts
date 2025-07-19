@@ -4,24 +4,6 @@ export interface Garment {
   model: string;
   brand: string;
   type: string;
-  features: string;
-  favorite: boolean;
-  style_id: number;
-  formality_id: number;
-  warmth_level_id: number;
-}
-
-export interface MaterialComposition {
-  material: string;
-  percentage: number;
-}
-
-export interface GarmentFormData {
-  id?: number;
-  file_name: string;
-  model: string;
-  brand: string;
-  type: string;
   style: string;
   formality: string;
   material_composition: MaterialComposition[];
@@ -32,5 +14,14 @@ export interface GarmentFormData {
   suitable_places: string[];
   suitable_occasions: string[];
   features: string;
-  favorite: boolean;
+  favorite?: boolean;
 }
+
+export interface MaterialComposition {
+  material: string;
+  percentage: number;
+}
+
+export type GarmentFormData = Omit<Garment, 'id' | 'favorite'> & {
+  favorite: boolean;
+};
