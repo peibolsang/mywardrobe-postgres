@@ -1,7 +1,7 @@
 "use client";
 
 import { FiHeart } from 'react-icons/fi';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react'; // Added useRef
 import Image from 'next/image';
 import { Toaster } from '../components/ui/sonner';
 import { toast } from 'sonner';
@@ -15,29 +15,29 @@ import { MultiSelect } from '../components/ui/multi-select';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
 import Link from 'next/link';
 import { cn } from '../lib/utils';
+import { createGarment, updateGarment, deleteGarment } from '@/actions/garment'; // Import Server Actions
+import { useActionState } from 'react'; // Import new React 19 hooks
+import { useFormStatus } from 'react-dom'; // Import new React 19 hooks
+import { GarmentFormData, MaterialComposition } from '@/lib/types'; // Import GarmentFormData and MaterialComposition
 
-interface MaterialComposition {
-  material: string;
-  percentage: number;
-}
-
+// Updated Garment interface to match the normalized schema output
 interface Garment {
   id: number;
   file_name: string;
   model: string;
   brand: string;
   type: string;
-  style: string;
-  formality: string;
-  material_composition: MaterialComposition[];
+  style: string; // Now a string name from lookup
+  formality: string; // Now a string name from lookup
+  material_composition: { material: string; percentage: number }[];
   color_palette: string[];
-  warmth_level: string;
+  warmth_level: string; // Now a string name from lookup
   suitable_weather: string[];
   suitable_time_of_day: string[];
   suitable_places: string[];
   suitable_occasions: string[];
   features: string;
-  favorite?: boolean;
+  favorite: boolean;
 }
 
 interface SchemaProperty {
@@ -57,25 +57,92 @@ interface Schema {
   };
 }
 
+// Removed initialWardrobeData and initialSchemaData from props
 interface EditorFormProps {
-  initialWardrobeData: Garment[];
-  initialSchemaData: Schema;
+  // No props needed, data will be fetched internally or by parent Server Component
 }
 
-export default function EditorForm({ initialWardrobeData, initialSchemaData }: EditorFormProps) {
-  const [wardrobeData, setWardrobeData] = useState<Garment[]>(initialWardrobeData);
-  const [schemaData, setSchemaData] = useState<Schema>(initialSchemaData);
+export default function EditorForm() { // Removed props from function signature
+  const [wardrobeData, setWardrobeData] = useState<Garment[]>([]); // Initialize as empty
+  const [schemaData, setSchemaData] = useState<Schema | null>(null); // Initialize as null
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [formData, setFormData] = useState<Garment | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
+  const [formData, setFormData] = useState<GarmentFormData | null>(null); // Use GarmentFormData for form state
   const [isNewGarmentMode, setIsNewGarmentMode] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const fileInputRef = useRef<HTMLInputElement>(null); // Ref for file input
 
-  const initializeNewGarment = (): Garment => {
-    const nextId = wardrobeData.length > 0 ? Math.max(...wardrobeData.map(g => g.id)) + 1 : 1;
+  // useActionState for form submission feedback
+  const [createState, createFormAction] = useActionState(createGarment, { message: '' });
+  const [updateState, updateFormAction] = useActionState(updateGarment, { message: '' });
+  const { pending } = useFormStatus(); // For pending state of form submission
+
+  // Handle toast messages from Server Actions
+  useEffect(() => {
+    if (createState.message) {
+      if (createState.message.includes('successfully')) {
+        toast.success(createState.message);
+      } else {
+        toast.error(createState.message);
+      }
+    }
+  }, [createState]);
+
+  useEffect(() => {
+    if (updateState.message) {
+      if (updateState.message.includes('successfully')) {
+        toast.success(updateState.message);
+      } else {
+        toast.error(updateState.message);
+      }
+    }
+  }, [updateState]);
+
+  // Fetch initial data
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const wardrobeRes = await fetch('/api/wardrobe');
+        const wardrobeJson = await wardrobeRes.json();
+        setWardrobeData(wardrobeJson);
+
+        const schemaRes = await fetch('/schema.json'); // Assuming schema.json is in public
+        const schemaJson = await schemaRes.json();
+        setSchemaData(schemaJson);
+      } catch (error) {
+        console.error('Failed to fetch initial data:', error);
+        toast.error('Failed to load initial wardrobe data or schema.');
+      }
+    };
+    fetchData();
+  }, []); // Run once on mount
+
+  useEffect(() => {
+    if (wardrobeData.length > 0 && !isNewGarmentMode) {
+      const currentGarment = wardrobeData[currentIndex];
+      // Ensure material_composition is an array and filter out empty entries
+      const filteredMaterialComposition = Array.isArray(currentGarment.material_composition)
+        ? currentGarment.material_composition.filter(mc => mc.material.trim() !== '' && mc.percentage > 0)
+        : [];
+
+      setFormData({
+        ...currentGarment,
+        material_composition: filteredMaterialComposition,
+        // Ensure other array fields are arrays
+        color_palette: Array.isArray(currentGarment.color_palette) ? currentGarment.color_palette : [],
+        suitable_weather: Array.isArray(currentGarment.suitable_weather) ? currentGarment.suitable_weather : [],
+        suitable_time_of_day: Array.isArray(currentGarment.suitable_time_of_day) ? currentGarment.suitable_time_of_day : [],
+        suitable_places: Array.isArray(currentGarment.suitable_places) ? currentGarment.suitable_places : [],
+        suitable_occasions: Array.isArray(currentGarment.suitable_occasions) ? currentGarment.suitable_occasions : [],
+      });
+    } else if (isNewGarmentMode) {
+      setFormData(initializeNewGarment());
+    }
+  }, [currentIndex, wardrobeData, isNewGarmentMode]);
+
+  const initializeNewGarment = (): GarmentFormData => {
+    // ID will be generated by the database, so no need to calculate here
     return {
-      id: nextId,
-      file_name: '', // Will be generated or handled later
+      file_name: '',
       model: '',
       brand: '',
       type: '',
@@ -89,18 +156,9 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
       suitable_places: [],
       suitable_occasions: [],
       features: '',
+      favorite: false, // Default to false for new garments
     };
   };
-
-  useEffect(() => {
-    if (wardrobeData.length > 0 && !isNewGarmentMode) {
-      const currentGarment = wardrobeData[currentIndex];
-      const filteredMaterialComposition = currentGarment.material_composition.filter(mc => mc.percentage > 0);
-      setFormData({ ...currentGarment, material_composition: filteredMaterialComposition });
-    } else if (isNewGarmentMode) {
-      setFormData(initializeNewGarment());
-    }
-  }, [currentIndex, wardrobeData, isNewGarmentMode]);
 
   const handleNext = () => {
     setCurrentIndex((prevIndex) => (prevIndex + 1) % wardrobeData.length);
@@ -116,14 +174,12 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
     const { name, value } = e.target;
     setFormData((prevData) => {
       if (!prevData) return null;
-      // Handle array types (e.g., color_palette, suitable_weather) - now handled by MultiSelect
       if (name.startsWith('material_composition[')) {
-        // Handle material_composition array of objects
         const [_, indexStr, field] = name.match(/material_composition\[(\d+)\]\.(.*)/) || [];
         const index = parseInt(indexStr);
         const newMaterialComposition = [...prevData.material_composition];
         if (field === 'percentage') {
-          const newPercentage = value === '' ? NaN : parseInt(value); // Allow empty string, convert to NaN
+          const newPercentage = value === '' ? NaN : parseInt(value);
           newMaterialComposition[index] = { ...newMaterialComposition[index], [field]: newPercentage };
         } else {
           newMaterialComposition[index] = { ...newMaterialComposition[index], [field]: value };
@@ -180,87 +236,59 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
     });
   };
 
-  const handleToggleFavorite = async (garmentId: number) => {
-    const updatedWardrobeData = wardrobeData.map(garment =>
-      garment.id === garmentId ? { ...garment, favorite: !garment.favorite } : garment
-    );
-
-    try {
-      const res = await fetch('/api/update-wardrobe', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(updatedWardrobeData),
-      });
-
-      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-
-      setWardrobeData(updatedWardrobeData);
-      toast.success('Favorite status updated!');
-    } catch (e: any) {
-      console.error('Error updating favorite status:', e);
-      toast.error(`Failed to update favorite status: ${e.message}`);
-    }
-  };
-
-  const handleSave = async () => {
+  const handleToggleFavorite = async (garmentId: number, currentFavoriteStatus: boolean) => {
     if (!formData) return;
 
-    const errors = validateForm(formData);
-    if (Object.keys(errors).length > 0) {
-      setValidationErrors(errors);
-      toast.error('Please fill in all required fields.');
-      return;
-    }
-
-    const dataToSave = {
+    const updatedFormData: GarmentFormData = {
       ...formData,
-      material_composition: formData.material_composition.filter(mc => mc.percentage > 0)
+      id: garmentId, // Ensure ID is present for update
+      favorite: !currentFavoriteStatus,
     };
 
-    let updatedWardrobeData = [];
-    if (isNewGarmentMode) {
-      updatedWardrobeData = [...wardrobeData, dataToSave];
-    } else {
-      updatedWardrobeData = wardrobeData.map((item, idx) => (idx === currentIndex ? dataToSave : item));
+    // Create a new FormData object for the update action
+    const updateFormData = new FormData();
+    for (const key in updatedFormData) {
+      if (key === 'material_composition' || key === 'color_palette' || key === 'suitable_weather' || key === 'suitable_time_of_day' || key === 'suitable_places' || key === 'suitable_occasions') {
+        updateFormData.append(key, JSON.stringify((updatedFormData as any)[key]));
+      } else if (key === 'file_name') {
+        // If file_name is a URL, we need to pass it as a string, not a File object
+        updateFormData.append('current_file_name', updatedFormData.file_name);
+      } else {
+        updateFormData.append(key, String((updatedFormData as any)[key]));
+      }
     }
 
-    try {
-      setIsSaving(true);
-      const res = await fetch('/api/update-wardrobe', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(updatedWardrobeData),
-      });
+    // Call the updateGarment Server Action
+    const result = await updateGarment(null, updateFormData); // Pass null for prevState
 
-      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-
-      setWardrobeData(updatedWardrobeData);
-      if (isNewGarmentMode) { // Only change index if a new garment was added
-        setCurrentIndex(updatedWardrobeData.length - 1);
-      }
-      setIsNewGarmentMode(false); // Exit new garment mode after saving
-      setValidationErrors({}); // Clear validation errors on successful save
-
-      toast.success('Wardrobe data updated successfully!', {
-        style: {
-          background: "#d4edda",
-          color: "#155724",
-          borderColor: "#c3e6cb",
-        },
-      });
-    } catch (e: any) {
-      console.error('Error saving data:', e);
-      toast.error(`Failed to save data: ${e.message}`);
-    } finally {
-      setIsSaving(false);
+    if (result.message?.includes('successfully')) {
+      toast.success(result.message);
+      // Re-fetch data to reflect the change
+      const wardrobeRes = await fetch('/api/wardrobe');
+      const wardrobeJson = await wardrobeRes.json();
+      setWardrobeData(wardrobeJson);
+    } else {
+      toast.error(result.message || 'Failed to update favorite status.');
     }
   };
 
-  const validateForm = (data: Garment) => {
+  const handleDelete = async (garmentId: number) => {
+    if (window.confirm('Are you sure you want to delete this garment?')) {
+      const result = await deleteGarment(garmentId);
+      if (result.message?.includes('successfully')) {
+        toast.success(result.message);
+        // Re-fetch data and adjust index
+        const wardrobeRes = await fetch('/api/wardrobe');
+        const wardrobeJson = await wardrobeRes.json();
+        setWardrobeData(wardrobeJson);
+        setCurrentIndex(0); // Reset to first garment after deletion
+      } else {
+        toast.error(result.message || 'Failed to delete garment.');
+      }
+    }
+  };
+
+  const validateForm = (data: GarmentFormData) => {
     const errors: Record<string, string> = {};
     if (!schemaData) return errors;
 
@@ -306,7 +334,32 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
               {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
             </>
           );
-        } else if (prop.enum) {
+        } else if (key === 'file_name') {
+          return (
+            <>
+              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
+              <Input
+                type="file"
+                name={key}
+                onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    setFormData((prevData) => {
+                      if (!prevData) return null;
+                      return { ...prevData, file_name: e.target.files![0].name }; // Store file name for display
+                    });
+                  }
+                }}
+                ref={fileInputRef} // Attach ref to file input
+                className={hasError ? 'border-red-500' : ''}
+              />
+              {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
+              {currentGarment?.file_name && !isNewGarmentMode && (
+                <p className="text-sm text-gray-500 mt-1">Current file: {currentGarment.file_name.split('/').pop()}</p>
+              )}
+            </>
+          );
+        }
+        else if (prop.enum) {
           return (
             <>
               <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
@@ -397,7 +450,7 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
               {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
             </div>
           );
-        } else if (prop.items?.enum) { // Check if the array items have enums
+        } else if (prop.items?.enum) {
           return (
             <>
               <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
@@ -411,7 +464,6 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
             </>
           );
         } else {
-          // Fallback for other array types if any
           return (
             <>
               <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
@@ -455,7 +507,7 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
         </Button>
       </div>
 
-      {!isNewGarmentMode && (
+      {!isNewGarmentMode && wardrobeData.length > 0 && (
         <div className="flex items-center justify-between w-full max-w-5xl mb-8">
           <Button onClick={handlePrev} variant="outline">
             Previous
@@ -473,8 +525,8 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
         <div className="flex items-center justify-between w-full max-w-5xl mb-8">
           <Button variant="outline" onClick={() => {
             setIsNewGarmentMode(false);
-            setCurrentIndex(0); // Go back to the first garment
-            setValidationErrors({}); // Clear validation errors
+            setCurrentIndex(0);
+            setValidationErrors({});
           }}>
             Cancel
           </Button>
@@ -484,24 +536,36 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
       {currentGarment && schemaProperties && (
         <Card className="w-full max-w-5xl relative">
           {!isNewGarmentMode && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="absolute top-4 right-4 text-gray-400 hover:text-red-500"
-              onClick={() => handleToggleFavorite(currentGarment.id)}
-            >
-              <FiHeart fill={currentGarment.favorite ? 'red' : 'none'} />
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="absolute top-4 right-4 text-gray-400 hover:text-red-500"
+                onClick={() => handleToggleFavorite(currentGarment.id!, currentGarment.favorite)} // Pass current favorite status
+              >
+                <FiHeart fill={currentGarment.favorite ? 'red' : 'none'} />
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="absolute top-4 right-16" // Position next to favorite button
+                onClick={() => handleDelete(currentGarment.id!)}
+              >
+                Delete
+              </Button>
+            </>
           )}
           <CardHeader>
-            <CardTitle className="text-center text-2xl">{currentGarment.model} {currentGarment.type}, by {currentGarment.brand}</CardTitle>
+            <CardTitle className="text-center text-2xl">
+              {currentGarment.model} {currentGarment.type}, by {currentGarment.brand}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col md:flex-row gap-6">
               <div className="md:w-1/2 flex flex-col items-center justify-start p-4">
                 {currentGarment.file_name && (
                   <Image
-                    key={currentGarment.file_name} // Add key to force re-render on file_name change
+                    key={currentGarment.file_name}
                     src={currentGarment.file_name}
                     alt={currentGarment.model}
                     width={400}
@@ -511,27 +575,37 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
                 )}
               </div>
 
-              <form onSubmit={(e) => { e.preventDefault(); handleSave(); }} className="md:w-1/2 p-4">
-                
+              <form action={isNewGarmentMode ? createFormAction : updateFormAction} className="md:w-1/2 p-4">
+                {/* Hidden input for ID when updating */}
+                {!isNewGarmentMode && currentGarment.id && (
+                  <input type="hidden" name="id" value={currentGarment.id} />
+                )}
+                {/* Hidden input for current_file_name when updating and not changing file */}
+                {!isNewGarmentMode && currentGarment.file_name && (
+                  <input type="hidden" name="current_file_name" value={currentGarment.file_name} />
+                )}
+                {/* Hidden input for favorite status */}
+                <input type="hidden" name="favorite" value={String(currentGarment.favorite)} />
+
                 <Accordion type="multiple" className="w-full">
                   <AccordionItem value="item-1">
                     <AccordionTrigger>Basic Information</AccordionTrigger>
                     <AccordionContent>
-              <div>
-                <div>
-                        {isNewGarmentMode && renderInputField('file_name', { type: 'string', description: 'Image file name (e.g., /image.png)' }, currentGarment.file_name)}
-                        {renderInputField('model', schemaProperties.model, currentGarment.model)}
+                      <div>
+                        <div>
+                          {renderInputField('file_name', { type: 'string', description: 'Image file' }, currentGarment.file_name)}
+                          {renderInputField('model', schemaProperties.model, currentGarment.model)}
+                        </div>
+                        <div className="mb-4 mt-4">
+                          {renderInputField('brand', schemaProperties.brand, currentGarment.brand)}
+                        </div>
+                        <div className="mb-4">
+                          {renderInputField('type', schemaProperties.type, currentGarment.type)}
+                        </div>
+                        <div className="mb-4">
+                          {renderInputField('features', schemaProperties.features, currentGarment.features)}
+                        </div>
                       </div>
-                      <div className="mb-4 mt-4">
-                        {renderInputField('brand', schemaProperties.brand, currentGarment.brand)}
-                      </div>
-                      <div className="mb-4">
-                        {renderInputField('type', schemaProperties.type, currentGarment.type)}
-                      </div>
-                      <div className="mb-4">
-                        {renderInputField('features', schemaProperties.features, currentGarment.features)}
-                      </div>
-              </div>
                     </AccordionContent>
                   </AccordionItem>
 
@@ -580,8 +654,8 @@ export default function EditorForm({ initialWardrobeData, initialSchemaData }: E
                     </AccordionContent>
                   </AccordionItem>
                 </Accordion>
-                <Button type="submit" className="mt-4 w-full" disabled={isSaving}>
-                  {isSaving ? 'Saving...' : 'Save Changes'}
+                <Button type="submit" className="mt-4 w-full" disabled={pending}>
+                  {pending ? 'Saving...' : 'Save Changes'}
                 </Button>
               </form>
             </div>

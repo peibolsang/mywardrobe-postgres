@@ -23,6 +23,7 @@
 # misc
 .DS_Store
 *.pem
+wardrobe.json
 
 # debug
 npm-debug.log*
@@ -42,3 +43,7 @@ next-env.d.ts
 
 # public folder
 /public/*.png
+
+# agents
+GEMINI.md
+/vibecoding/*
