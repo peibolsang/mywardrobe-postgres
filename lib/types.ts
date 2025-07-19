@@ -23,5 +23,6 @@ export interface MaterialComposition {
 }
 
 export type GarmentFormData = Omit<Garment, 'id' | 'favorite'> & {
+  id?: number;
   favorite: boolean;
 };
