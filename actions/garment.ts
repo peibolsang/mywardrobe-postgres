@@ -25,7 +25,7 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
     const brand = (formData.get('brand') as string) || existingGarment.brand;
     const type = (formData.get('type') as string) || existingGarment.type;
     const features = (formData.get('features') as string) || existingGarment.features;
-    const favorite = formData.has('favorite') ? (formData.get('favorite') === 'on') : existingGarment.favorite;
+    const favorite = formData.has('favorite') ? (formData.get('favorite') === 'true') : existingGarment.favorite;
 
     // Get names for single-select lookup fields
     // Get names for single-select lookup fields
