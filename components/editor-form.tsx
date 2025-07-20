@@ -4,6 +4,7 @@ import { FavoriteButton } from './client/favorite-button';
 import { useState, useEffect } from 'react'; // Removed useRef
 
 import Image from 'next/image';
+import Link from 'next/link';
 import { Toaster } from '../components/ui/sonner';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -493,14 +494,14 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
   return (
     <div className={cn(
       "min-h-screen bg-gray-100 flex flex-col items-center p-4",
-      isNewGarmentModeProp ? "justify-start pt-16" : "justify-start pt-16"
+      isNewGarmentModeProp ? "justify-start pt-6" : "justify-start pt-6"
     )}>
       <Toaster />
 
       
 
       {!isNewGarmentMode && (
-        <div className="flex items-center justify-between w-full max-w-5xl mb-8">
+        <div className="flex items-center justify-between w-full max-w-5xl mb-4">
           <Button onClick={handlePrev} variant="outline">
             Previous
           </Button>
@@ -535,21 +536,22 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
           )}
           <CardHeader>
             <CardTitle className="text-center text-2xl">
-              {currentGarment.model} {currentGarment.type}, by {currentGarment.brand}
+              {(isNewGarmentMode && (!currentGarment.model || !currentGarment.brand || !currentGarment.type))
+                ? "New Garment"
+                : `${currentGarment.model} ${currentGarment.type}, by ${currentGarment.brand}`}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col md:flex-row gap-6">
-              <div className="md:w-1/2 flex flex-col items-center justify-start p-4 relative h-96">
-                {currentGarment.file_name && (
-                  <Image
-                    key={currentGarment.file_name}
-                    src={currentGarment.file_name}
-                    alt={currentGarment.model}
-                    fill
-                    className="object-contain"
-                  />
-                )}
+              <div className="md:w-1/2 flex flex-col items-center justify-start p-4 relative">
+                <Image
+                  key={currentGarment.file_name || 'placeholder'}
+                  src={currentGarment.file_name || '/placeholder.png'}
+                  alt={currentGarment.model || 'Placeholder Image'}
+                  width={400}
+                  height={400}
+                  objectFit="contain"
+                />
               </div>
 
               <form action={isNewGarmentMode ? createFormAction : updateFormAction} className="md:w-1/2 p-4">
@@ -641,7 +643,12 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                     </AccordionContent>
                   </AccordionItem>
                 </Accordion>
-                <SubmitButton />
+                <div className="flex flex-col mt-4 space-y-2">
+                  <SubmitButton />
+                  <Button asChild variant="outline" className="w-full">
+                    <Link href="/viewer">Cancel</Link>
+                  </Button>
+                </div>
               </form>
             </div>
           </CardContent>
