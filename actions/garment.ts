@@ -4,8 +4,8 @@ import { neon } from '@neondatabase/serverless';
 import { revalidateTag } from 'next/cache';
 
 export async function createGarment(prevState: any, formData: FormData): Promise<{ message: string; status: string }> {
-  const sql = neon(process.env.DATABASE_URL!);
-  return { message: 'Garment created successfully!', status: 'success' };
+  // Placeholder for now, actual implementation will come later
+  return { message: 'Garment creation not yet implemented.', status: 'info' };
 }
 
 export async function updateGarment(prevState: any, formData: FormData): Promise<{ message: string; status: string }> {
