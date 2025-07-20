@@ -1,8 +1,10 @@
-import { sql } from "@/lib/db";
+
 import { Garment } from "@/lib/types";
 import GarmentModalClient from "./garment-modal-client";
+import { neon } from '@neondatabase/serverless';
 
 async function getGarment(id: string): Promise<Garment | null> {
+  const sql = neon(process.env.DATABASE_URL!);
   const garments = await sql`SELECT * FROM garments WHERE id = ${id}`;
   return (garments[0] as Garment) || null;
 }

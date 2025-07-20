@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { sql } from '@/lib/db';
+import { neon } from '@neondatabase/serverless';
 import { unstable_cache } from 'next/cache';
 
 interface Garment {
@@ -23,6 +23,7 @@ interface Garment {
 
 const getGarments = unstable_cache(
   async () => {
+    const sql = neon(`${process.env.DATABASE_URL}`);
     const garments = await sql`
       SELECT
         g.id,
@@ -59,7 +60,7 @@ const getGarments = unstable_cache(
       LEFT JOIN suitable_occasions so ON gso.suitable_occasion_id = so.id
       GROUP BY g.id, s.name, f.name, wl.name
       ORDER BY g.id ASC;
-    ` as Garment[];
+    ` as unknown as Garment[];
     return garments;
   },
   ['garments'],

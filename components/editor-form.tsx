@@ -1,7 +1,7 @@
 "use client";
 
 import { FiHeart } from 'react-icons/fi';
-import { useState, useEffect, useRef } from 'react'; // Added useRef
+import { useState, useEffect } from 'react'; // Removed useRef
 import Image from 'next/image';
 import { Toaster } from '../components/ui/sonner';
 import { toast } from 'sonner';
@@ -13,7 +13,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Label } from '../components/ui/label';
 import { MultiSelect } from '../components/ui/multi-select';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
-import Link from 'next/link';
 import { cn } from '../lib/utils';
 import { createGarment, updateGarment, deleteGarment } from '@/actions/garment'; // Import Server Actions
 import { useActionState } from 'react'; // Import new React 19 hooks
@@ -69,11 +68,10 @@ export default function EditorForm() { // Removed props from function signature
   const [formData, setFormData] = useState<GarmentFormData | null>(null); // Use GarmentFormData for form state
   const [isNewGarmentMode, setIsNewGarmentMode] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
-  const fileInputRef = useRef<HTMLInputElement>(null); // Ref for file input
 
   // useActionState for form submission feedback
-  const [createState, createFormAction] = useActionState(createGarment, { message: '' });
-  const [updateState, updateFormAction] = useActionState(updateGarment, { message: '' });
+  const [createState, createFormAction] = useActionState(createGarment, { message: '', status: '' });
+  const [updateState, updateFormAction] = useActionState(updateGarment, { message: '', status: '' });
   const { pending } = useFormStatus(); // For pending state of form submission
 
   // Handle toast messages from Server Actions
@@ -339,23 +337,14 @@ export default function EditorForm() { // Removed props from function signature
             <>
               <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
               <Input
-                type="file"
+                type="text"
                 name={key}
-                onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) {
-                    setFormData((prevData) => {
-                      if (!prevData) return null;
-                      return { ...prevData, file_name: e.target.files![0].name }; // Store file name for display
-                    });
-                  }
-                }}
-                ref={fileInputRef} // Attach ref to file input
+                value={value}
+                onChange={handleChange}
+                placeholder={placeholderText}
                 className={hasError ? 'border-red-500' : ''}
               />
               {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
-              {currentGarment?.file_name && !isNewGarmentMode && (
-                <p className="text-sm text-gray-500 mt-1">Current file: {currentGarment.file_name.split('/').pop()}</p>
-              )}
             </>
           );
         }
@@ -580,12 +569,22 @@ export default function EditorForm() { // Removed props from function signature
                 {!isNewGarmentMode && currentGarment.id && (
                   <input type="hidden" name="id" value={currentGarment.id} />
                 )}
-                {/* Hidden input for current_file_name when updating and not changing file */}
-                {!isNewGarmentMode && currentGarment.file_name && (
-                  <input type="hidden" name="current_file_name" value={currentGarment.file_name} />
-                )}
+                
                 {/* Hidden input for favorite status */}
                 <input type="hidden" name="favorite" value={String(currentGarment.favorite)} />
+
+                {/* Hidden inputs for multi-select fields */}
+                <input type="hidden" name="colors" value={currentGarment.color_palette.join(',')} />
+                <input type="hidden" name="suitableWeathers" value={currentGarment.suitable_weather.join(',')} />
+                <input type="hidden" name="suitableTimesOfDay" value={currentGarment.suitable_time_of_day.join(',')} />
+                <input type="hidden" name="suitablePlaces" value={currentGarment.suitable_places.join(',')} />
+                <input type="hidden" name="suitableOccasions" value={currentGarment.suitable_occasions.join(',')} />
+                <input type="hidden" name="materials" value={JSON.stringify(currentGarment.material_composition.map(m => ({ material: m.material, percentage: m.percentage })))} />
+
+                {/* Hidden inputs for single-select fields */}
+                <input type="hidden" name="style" value={currentGarment.style || ''} />
+                <input type="hidden" name="formality" value={currentGarment.formality || ''} />
+                <input type="hidden" name="warmthLevel" value={currentGarment.warmth_level || ''} />
 
                 <Accordion type="multiple" className="w-full">
                   <AccordionItem value="item-1">

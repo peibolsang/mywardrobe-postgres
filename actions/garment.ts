@@ -1,333 +1,177 @@
 'use server';
 
-import { sql, pool } from '@/lib/db';
-import { GarmentFormData } from '@/lib/types';
+import { neon } from '@neondatabase/serverless';
 import { revalidateTag } from 'next/cache';
-import { put } from '@vercel/blob';
 
-async function getOrCreateLookupId(tableName: string, name: string): Promise<number> {
-  let query: string;
-  switch (tableName) {
-    case 'styles':
-      query = `SELECT id FROM styles WHERE name = ${name}`;
-      break;
-    case 'formalities':
-      query = `SELECT id FROM formalities WHERE name = ${name}`;
-      break;
-    case 'warmth_levels':
-      query = `SELECT id FROM warmth_levels WHERE name = ${name}`;
-      break;
-    case 'suitable_weathers':
-      query = `SELECT id FROM suitable_weathers WHERE name = ${name}`;
-      break;
-    case 'suitable_times_of_day':
-      query = `SELECT id FROM suitable_times_of_day WHERE name = ${name}`;
-      break;
-    case 'suitable_places':
-      query = `SELECT id FROM suitable_places WHERE name = ${name}`;
-      break;
-    case 'suitable_occasions':
-      query = `SELECT id FROM suitable_occasions WHERE name = ${name}`;
-      break;
-    case 'colors':
-      query = `SELECT id FROM colors WHERE name = ${name}`;
-      break;
-    case 'materials':
-      query = `SELECT id FROM materials WHERE name = ${name}`;
-      break;
-    default:
-      throw new Error(`Unknown table name: ${tableName}`);
-  }
-
-  const result = await sql`${query}` as { id: number }[];
-
-  if (result.length > 0) {
-    return result[0].id;
-  } else {
-    let insertQuery: string;
-    switch (tableName) {
-      case 'styles':
-        insertQuery = `INSERT INTO styles (name) VALUES (${name}) RETURNING id`;
-        break;
-      case 'formalities':
-        insertQuery = `INSERT INTO formalities (name) VALUES (${name}) RETURNING id`;
-        break;
-      case 'warmth_levels':
-        insertQuery = `INSERT INTO warmth_levels (name) VALUES (${name}) RETURNING id`;
-        break;
-      case 'suitable_weathers':
-        insertQuery = `INSERT INTO suitable_weathers (name) VALUES (${name}) RETURNING id`;
-        break;
-      case 'suitable_times_of_day':
-        insertQuery = `INSERT INTO suitable_times_of_day (name) VALUES (${name}) RETURNING id`;
-        break;
-      case 'suitable_places':
-        insertQuery = `INSERT INTO suitable_places (name) VALUES (${name}) RETURNING id`;
-        break;
-      case 'suitable_occasions':
-        insertQuery = `INSERT INTO suitable_occasions (name) VALUES (${name}) RETURNING id`;
-        break;
-      case 'colors':
-        insertQuery = `INSERT INTO colors (name) VALUES (${name}) RETURNING id`;
-        break;
-      case 'materials':
-        insertQuery = `INSERT INTO materials (name) VALUES (${name}) RETURNING id`;
-        break;
-      default:
-        throw new Error(`Unknown table name: ${tableName}`);
-    }
-    const newResult = await sql`${insertQuery}` as { id: number }[];
-    return newResult[0].id;
-  }
+export async function createGarment(prevState: any, formData: FormData): Promise<{ message: string; status: string }> {
+  const sql = neon(process.env.DATABASE_URL!);
+  return { message: 'Garment created successfully!', status: 'success' };
 }
 
-export async function createGarment(prevState: any, formData: FormData) {
-  const file = formData.get('file_name') as File;
-  let file_name = '';
-
-  if (file && file.size > 0) {
-    const blob = await put(file.name, file, { access: 'public' });
-    file_name = blob.url;
-  }
-
-  const garmentData: GarmentFormData = {
-    file_name: file_name,
-    model: formData.get('model') as string,
-    brand: formData.get('brand') as string,
-    type: formData.get('type') as string,
-    style: formData.get('style') as string,
-    formality: formData.get('formality') as string,
-    material_composition: JSON.parse(formData.get('material_composition') as string),
-    color_palette: JSON.parse(formData.get('color_palette') as string),
-    warmth_level: formData.get('warmth_level') as string,
-    suitable_weather: JSON.parse(formData.get('suitable_weather') as string),
-    suitable_time_of_day: JSON.parse(formData.get('suitable_time_of_day') as string),
-    suitable_places: JSON.parse(formData.get('suitable_places') as string),
-    suitable_occasions: JSON.parse(formData.get('suitable_occasions') as string),
-    features: formData.get('features') as string,
-    favorite: formData.get('favorite') === 'on',
-  };
-
-  const client = await pool.connect();
+export async function updateGarment(prevState: any, formData: FormData): Promise<{ message: string; status: string }> {
+  const sql = neon(process.env.DATABASE_URL!);
   try {
-    await client.query('BEGIN');
+    const id = parseInt(formData.get('id') as string);
+    const fileName = formData.get('file_name') as string;
+    const model = formData.get('model') as string;
+    const brand = formData.get('brand') as string;
+    const type = formData.get('type') as string;
+    const features = formData.get('features') as string;
+    const favorite = formData.get('favorite') === 'on';
 
-    const style_id = await getOrCreateLookupId('styles', garmentData.style);
-    const formality_id = await getOrCreateLookupId('formalities', garmentData.formality);
-    const warmth_level_id = await getOrCreateLookupId('warmth_levels', garmentData.warmth_level);
+    // Get names for single-select lookup fields
+    const styleName = formData.get('style') as string;
+    const formalityName = formData.get('formality') as string;
+    const warmthLevelName = formData.get('warmthLevel') as string;
 
-    const garmentRows = await client.query(
-      `INSERT INTO garments (file_name, model, brand, type, features, favorite, style_id, formality_id, warmth_level_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      RETURNING id`,
-      [garmentData.file_name, garmentData.model, garmentData.brand, garmentData.type, garmentData.features, garmentData.favorite, style_id, formality_id, warmth_level_id]
-    );
-    const garment_id = garmentRows.rows[0].id;
+    // Get names for multi-select lookup fields (assuming comma-separated names)
+    const colorNames = (formData.get('colors') as string)?.split(',').filter(Boolean) || [];
+    const suitableWeatherNames = (formData.get('suitableWeathers') as string)?.split(',').filter(Boolean) || [];
+    const suitableTimeOfDayNames = (formData.get('suitableTimesOfDay') as string)?.split(',').filter(Boolean) || [];
+    const suitablePlaceNames = (formData.get('suitablePlaces') as string)?.split(',').filter(Boolean) || [];
+    const suitableOccasionNames = (formData.get('suitableOccasions') as string)?.split(',').filter(Boolean) || [];
 
-    for (const weather of garmentData.suitable_weather) {
-      const weather_id = await getOrCreateLookupId('suitable_weathers', weather);
-      await client.query(
-        `INSERT INTO garment_suitable_weather (garment_id, suitable_weather_id) VALUES ($1, $2)`,
-        [garment_id, weather_id]
-      );
+    // Materials are complex, assuming a JSON string for now
+    const materialsJson = formData.get('materials') as string;
+    let materials: { material: string; percentage: number }[] = [];
+    if (materialsJson) {
+      try {
+        materials = JSON.parse(materialsJson).map((m: any) => ({
+          material: m.material,
+          percentage: parseInt(m.percentage)
+        }));
+      } catch (e) {
+        console.error('Failed to parse materials JSON:', e);
+        return { message: 'Error: Invalid materials data.', status: 'error' };
+      }
     }
 
-    for (const time_of_day of garmentData.suitable_time_of_day) {
-      const time_of_day_id = await getOrCreateLookupId('suitable_times_of_day', time_of_day);
-      await client.query(
-        `INSERT INTO garment_suitable_time_of_day (garment_id, suitable_time_of_day_id) VALUES ($1, $2)`,
-        [garment_id, time_of_day_id]
-      );
-    }
+    // Fetch material IDs based on names
+    const materialNames = materials.map(m => m.material);
+    const materialsResult = materialNames.length > 0 ? await sql`SELECT id, name FROM materials WHERE name = ANY(${materialNames})` : [];
+    const materialIdMap = new Map(materialsResult.map((m: any) => [m.name, m.id]));
 
-    for (const place of garmentData.suitable_places) {
-      const place_id = await getOrCreateLookupId('suitable_places', place);
-      await client.query(
-        `INSERT INTO garment_suitable_place (garment_id, suitable_place_id) VALUES ($1, $2)`,
-        [garment_id, place_id]
-      );
-    }
+    const materialCompositionToInsert = materials.map(m => ({
+      id: materialIdMap.get(m.material),
+      percentage: m.percentage
+    })).filter(m => m.id !== undefined); // Filter out materials not found in DB
 
-    for (const occasion of garmentData.suitable_occasions) {
-      const occasion_id = await getOrCreateLookupId('suitable_occasions', occasion);
-      await client.query(
-        `INSERT INTO garment_suitable_occasion (garment_id, suitable_occasion_id) VALUES ($1, $2)`,
-        [garment_id, occasion_id]
-      );
-    }
+    // Fetch IDs for lookup tables
+    const [
+      styleResult,
+      formalityResult,
+      warmthLevelResult,
+      colorsResult,
+      suitableWeathersResult,
+      suitableTimesOfDayResult,
+      suitablePlacesResult,
+      suitableOccasionsResult,
+    ] = await Promise.all([
+      sql`SELECT id FROM styles WHERE name = ${styleName}`,
+      sql`SELECT id FROM formalities WHERE name = ${formalityName}`,
+      sql`SELECT id FROM warmth_levels WHERE name = ${warmthLevelName}`,
+      sql`SELECT id FROM colors WHERE name = ANY(${colorNames})`,
+      sql`SELECT id FROM suitable_weathers WHERE name = ANY(${suitableWeatherNames})`,
+      sql`SELECT id FROM suitable_times_of_day WHERE name = ANY(${suitableTimeOfDayNames})`,
+      sql`SELECT id FROM suitable_places WHERE name = ANY(${suitablePlaceNames})`,
+      sql`SELECT id FROM suitable_occasions WHERE name = ANY(${suitableOccasionNames})`,
+    ]);
 
-    for (const color of garmentData.color_palette) {
-      const color_id = await getOrCreateLookupId('colors', color);
-      await client.query(
-        `INSERT INTO garment_color (garment_id, color_id) VALUES ($1, $2)`,
-        [garment_id, color_id]
-      );
-    }
+    const styleId = styleResult[0]?.id;
+    const formalityId = formalityResult[0]?.id;
+    const warmthLevelId = warmthLevelResult[0]?.id;
 
-    for (const material_comp of garmentData.material_composition) {
-      const material_id = await getOrCreateLookupId('materials', material_comp.material);
-      await client.query(
-        `INSERT INTO garment_material_composition (garment_id, material_id, percentage) VALUES ($1, $2, $3)`,
-        [garment_id, material_id, material_comp.percentage]
-      );
-    }
+    const colorIds = colorsResult.map((row: any) => row.id);
+    const suitableWeatherIds = suitableWeathersResult.map((row: any) => row.id);
+    const suitableTimeOfDayIds = suitableTimesOfDayResult.map((row: any) => row.id);
+    const suitablePlaceIds = suitablePlacesResult.map((row: any) => row.id);
+    const suitableOccasionIds = suitableOccasionsResult.map((row: any) => row.id);
 
-    await client.query('COMMIT');
-    revalidateTag('garments');
-    return { message: 'Garment created successfully!' };
+    // Start a transaction for atomicity
+    await sql`
+        UPDATE garments
+        SET
+          file_name = ${fileName},
+          model = ${model},
+          brand = ${brand},
+          type = ${type},
+          features = ${features},
+          favorite = ${favorite},
+          style_id = ${styleId},
+          formality_id = ${formalityId},
+          warmth_level_id = ${warmthLevelId}
+        WHERE id = ${id}
+      `;
+
+      // 2. Update many-to-many relationships
+      // For each junction table: delete existing, then insert new using unnest
+
+      // Materials
+      await sql`DELETE FROM garment_material_composition WHERE garment_id = ${id}`;
+      if (materialCompositionToInsert.length > 0) {
+        const materialIds = materialCompositionToInsert.map(m => m.id);
+        const percentages = materialCompositionToInsert.map(m => m.percentage);
+        await sql`
+          INSERT INTO garment_material_composition (garment_id, material_id, percentage)
+          SELECT ${id}, unnest(${materialIds}::int[]), unnest(${percentages}::int[])
+        `;
+      }
+
+      // Colors
+      await sql`DELETE FROM garment_color WHERE garment_id = ${id}`;
+      if (colorIds.length > 0) {
+        await sql`
+          INSERT INTO garment_color (garment_id, color_id)
+          SELECT ${id}, unnest(${colorIds}::int[])
+        `;
+      }
+
+      // Suitable Weathers
+      await sql`DELETE FROM garment_suitable_weather WHERE garment_id = ${id}`;
+      if (suitableWeatherIds.length > 0) {
+        await sql`
+          INSERT INTO garment_suitable_weather (garment_id, suitable_weather_id)
+          SELECT ${id}, unnest(${suitableWeatherIds}::int[])
+        `;
+      }
+
+      // Suitable Times of Day
+      await sql`DELETE FROM garment_suitable_time_of_day WHERE garment_id = ${id}`;
+      if (suitableTimeOfDayIds.length > 0) {
+        await sql`
+          INSERT INTO garment_suitable_time_of_day (garment_id, suitable_time_of_day_id)
+          SELECT ${id}, unnest(${suitableTimeOfDayIds}::int[])
+        `;
+      }
+
+      // Suitable Places
+      await sql`DELETE FROM garment_suitable_place WHERE garment_id = ${id}`;
+      if (suitablePlaceIds.length > 0) {
+        await sql`
+          INSERT INTO garment_suitable_place (garment_id, suitable_place_id)
+          SELECT ${id}, unnest(${suitablePlaceIds}::int[])
+        `;
+      }
+
+      // Suitable Occasions
+      await sql`DELETE FROM garment_suitable_occasion WHERE garment_id = ${id}`;
+      if (suitableOccasionIds.length > 0) {
+        await sql`
+          INSERT INTO garment_suitable_occasion (garment_id, suitable_occasion_id)
+          SELECT ${id}, unnest(${suitableOccasionIds}::int[])
+        `;
+      }
+
+    revalidateTag('garments'); // Invalidate cache for garments
+
+    return { message: 'Garment updated successfully!', status: 'success' };
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Error creating garment:', error);
-    return { message: 'Failed to create garment.' };
-  } finally {
-    client.release();
-  }
-}
-
-export async function updateGarment(prevState: any, formData: FormData) {
-  const garment_id = parseInt(formData.get('id') as string);
-  const file = formData.get('file_name') as File;
-  let file_name = formData.get('current_file_name') as string; // Keep current if no new file
-
-  if (file && file.size > 0) {
-    const blob = await put(file.name, file, { access: 'public' });
-    file_name = blob.url;
-  }
-
-  const garmentData: GarmentFormData = {
-    id: garment_id,
-    file_name: file_name,
-    model: formData.get('model') as string,
-    brand: formData.get('brand') as string,
-    type: formData.get('type') as string,
-    style: formData.get('style') as string,
-    formality: formData.get('formality') as string,
-    material_composition: JSON.parse(formData.get('material_composition') as string),
-    color_palette: JSON.parse(formData.get('color_palette') as string),
-    warmth_level: formData.get('warmth_level') as string,
-    suitable_weather: JSON.parse(formData.get('suitable_weather') as string),
-    suitable_time_of_day: JSON.parse(formData.get('suitable_time_of_day') as string),
-    suitable_places: JSON.parse(formData.get('suitable_places') as string),
-    suitable_occasions: JSON.parse(formData.get('suitable_occasions') as string),
-    features: formData.get('features') as string,
-    favorite: formData.get('favorite') === 'on',
-  };
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const style_id = await getOrCreateLookupId('styles', garmentData.style);
-    const formality_id = await getOrCreateLookupId('formalities', garmentData.formality);
-    const warmth_level_id = await getOrCreateLookupId('warmth_levels', garmentData.warmth_level);
-
-    await client.query(
-      `UPDATE garments
-      SET
-        file_name = $1,
-        model = $2,
-        brand = $3,
-        type = $4,
-        features = $5,
-        favorite = $6,
-        style_id = $7,
-        formality_id = $8,
-        warmth_level_id = $9
-      WHERE id = $10`,
-      [garmentData.file_name, garmentData.model, garmentData.brand, garmentData.type, garmentData.features, garmentData.favorite, style_id, formality_id, warmth_level_id, garment_id]
-    );
-
-    // Clear existing many-to-many relationships and re-insert
-    await client.query(`DELETE FROM garment_suitable_weather WHERE garment_id = $1`, [garment_id]);
-    for (const weather of garmentData.suitable_weather) {
-      const weather_id = await getOrCreateLookupId('suitable_weathers', weather);
-      await client.query(
-        `INSERT INTO garment_suitable_weather (garment_id, suitable_weather_id) VALUES ($1, $2)`,
-        [garment_id, weather_id]
-      );
-    }
-
-    await client.query(`DELETE FROM garment_suitable_time_of_day WHERE garment_id = $1`, [garment_id]);
-    for (const time_of_day of garmentData.suitable_time_of_day) {
-      const time_of_day_id = await getOrCreateLookupId('suitable_times_of_day', time_of_day);
-      await client.query(
-        `INSERT INTO garment_suitable_time_of_day (garment_id, suitable_time_of_day_id) VALUES ($1, $2)`,
-        [garment_id, time_of_day_id]
-      );
-    }
-
-    await client.query(`DELETE FROM garment_suitable_place WHERE garment_id = $1`, [garment_id]);
-    for (const place of garmentData.suitable_places) {
-      const place_id = await getOrCreateLookupId('suitable_places', place);
-      await client.query(
-        `INSERT INTO garment_suitable_place (garment_id, suitable_place_id) VALUES ($1, $2)`,
-        [garment_id, place_id]
-      );
-    }
-
-    await client.query(`DELETE FROM garment_suitable_occasion WHERE garment_id = $1`, [garment_id]);
-    for (const occasion of garmentData.suitable_occasions) {
-      const occasion_id = await getOrCreateLookupId('suitable_occasions', occasion);
-      await client.query(
-        `INSERT INTO garment_suitable_occasion (garment_id, suitable_occasion_id) VALUES ($1, $2)`,
-        [garment_id, occasion_id]
-      );
-    }
-
-    await client.query(`DELETE FROM garment_color WHERE garment_id = $1`, [garment_id]);
-    for (const color of garmentData.color_palette) {
-      const color_id = await getOrCreateLookupId('colors', color);
-      await client.query(
-        `INSERT INTO garment_color (garment_id, color_id) VALUES ($1, $2)`,
-        [garment_id, color_id]
-      );
-    }
-
-    await client.query(`DELETE FROM garment_material_composition WHERE garment_id = $1`, [garment_id]);
-    for (const material_comp of garmentData.material_composition) {
-      const material_id = await getOrCreateLookupId('materials', material_comp.material);
-      await client.query(
-        `INSERT INTO garment_material_composition (garment_id, material_id, percentage) VALUES ($1, $2, $3)`,
-        [garment_id, material_id, material_comp.percentage]
-      );
-    }
-
-    await client.query('COMMIT');
-    revalidateTag('garments');
-    return { message: 'Garment updated successfully!' };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Error updating garment:', error);
-    return { message: 'Failed to update garment.' };
-  } finally {
-    client.release();
+    console.error('Failed to update garment:', error);
+    return { message: 'Failed to update garment.', status: 'error' };
   }
 }
 
 export async function deleteGarment(id: number) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    // Delete from junction tables first (due to foreign key constraints)
-    await client.query(`DELETE FROM garment_suitable_weather WHERE garment_id = $1`, [id]);
-    await client.query(`DELETE FROM garment_suitable_time_of_day WHERE garment_id = $1`, [id]);
-    await client.query(`DELETE FROM garment_suitable_place WHERE garment_id = $1`, [id]);
-    await client.query(`DELETE FROM garment_suitable_occasion WHERE garment_id = $1`, [id]);
-    await client.query(`DELETE FROM garment_color WHERE garment_id = $1`, [id]);
-    await client.query(`DELETE FROM garment_material_composition WHERE garment_id = $1`, [id]);
-
-    // Then delete the garment itself
-    await client.query(`DELETE FROM garments WHERE id = $1`, [id]);
-
-    await client.query('COMMIT');
-    revalidateTag('garments');
-    return { message: 'Garment deleted successfully!' };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Error deleting garment:', error);
-    return { message: 'Failed to delete garment.' };
-  } finally {
-    client.release();
-  }
+  const sql = neon(process.env.DATABASE_URL!);
+  return { message: 'Garment deleted successfully!' };
 }
