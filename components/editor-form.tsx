@@ -1,7 +1,8 @@
 "use client";
 
-import { FiHeart } from 'react-icons/fi';
+import { FavoriteButton } from './client/favorite-button';
 import { useState, useEffect } from 'react'; // Removed useRef
+
 import Image from 'next/image';
 import { Toaster } from '../components/ui/sonner';
 import { toast } from 'sonner';
@@ -526,14 +527,10 @@ export default function EditorForm() { // Removed props from function signature
         <Card className="w-full max-w-5xl relative">
           {!isNewGarmentMode && (
             <>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute top-4 right-4 text-gray-400 hover:text-red-500 cursor-pointer"
-                onClick={() => handleToggleFavorite(currentGarment.id!, currentGarment.favorite)} // Pass current favorite status
-              >
-                <FiHeart fill={currentGarment.favorite ? 'red' : 'none'} />
-              </Button>
+              <FavoriteButton
+                isFavorite={currentGarment.favorite}
+                onClick={() => handleToggleFavorite(currentGarment.id!, currentGarment.favorite)}
+              />
               <Button
                 variant="destructive"
                 size="sm"
