@@ -21,7 +21,11 @@ const Toaster = ({ ...props }: ToasterProps) => {
         } as React.CSSProperties
       }
       {...props}
-      toastOptions={{}}
+      toastOptions={{
+        success: {
+          className: "bg-green-200 text-green-800 border-green-400",
+        },
+      }}
     />
   )
 }

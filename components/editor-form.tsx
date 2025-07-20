@@ -16,7 +16,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '..
 import { cn } from '../lib/utils';
 import { createGarment, updateGarment, deleteGarment } from '@/actions/garment'; // Import Server Actions
 import { useActionState } from 'react'; // Import new React 19 hooks
-import { useFormStatus } from 'react-dom'; // Import new React 19 hooks
+import { SubmitButton } from './client/submit-button';
 import { GarmentFormData, MaterialComposition } from '@/lib/types'; // Import GarmentFormData and MaterialComposition
 
 // Updated Garment interface to match the normalized schema output
@@ -72,7 +72,7 @@ export default function EditorForm() { // Removed props from function signature
   // useActionState for form submission feedback
   const [createState, createFormAction] = useActionState(createGarment, { message: '', status: '' });
   const [updateState, updateFormAction] = useActionState(updateGarment, { message: '', status: '' });
-  const { pending } = useFormStatus(); // For pending state of form submission
+  
 
   // Handle toast messages from Server Actions
   useEffect(() => {
@@ -653,9 +653,7 @@ export default function EditorForm() { // Removed props from function signature
                     </AccordionContent>
                   </AccordionItem>
                 </Accordion>
-                <Button type="submit" className="mt-4 w-full" disabled={pending}>
-                  {pending ? 'Saving...' : 'Save Changes'}
-                </Button>
+                <SubmitButton />
               </form>
             </div>
           </CardContent>
