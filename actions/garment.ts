@@ -2,10 +2,144 @@
 
 import { neon } from '@neondatabase/serverless';
 import { revalidateTag } from 'next/cache';
+import { redirect } from 'next/navigation';
 
-export async function createGarment(prevState: any, formData: FormData): Promise<{ message: string; status: string }> {
-  // Placeholder for now, actual implementation will come later
-  return { message: 'Garment creation not yet implemented.', status: 'info' };
+export async function createGarment(prevState: any, formData: FormData): Promise<{ message: string; status: string; newGarmentId?: number }> {
+  const sql = neon(process.env.DATABASE_URL!);
+
+  try {
+    // 1. Extract data from formData
+    const fileName = formData.get('file_name') as string;
+    const model = formData.get('model') as string;
+    const brand = formData.get('brand') as string;
+    const type = formData.get('type') as string;
+    const features = formData.get('features') as string;
+    const favorite = formData.get('favorite') === 'true';
+
+    // Single-select lookup fields
+    const styleName = formData.get('style') as string;
+    const formalityName = formData.get('formality') as string;
+    const warmthLevelName = formData.get('warmthLevel') as string;
+
+    // Multi-select lookup fields (comma-separated names)
+    const colorNames = (formData.get('colors') as string)?.split(',').filter(Boolean);
+    const suitableWeatherNames = (formData.get('suitableWeathers') as string)?.split(',').filter(Boolean);
+    const suitableTimeOfDayNames = (formData.get('suitableTimesOfDay') as string)?.split(',').filter(Boolean);
+    const suitablePlaceNames = (formData.get('suitablePlaces') as string)?.split(',').filter(Boolean);
+    const suitableOccasionNames = (formData.get('suitableOccasions') as string)?.split(',').filter(Boolean);
+
+    // Material composition (JSON string)
+    const materialsJson = formData.get('materials') as string;
+    const materials: { material: string; percentage: number }[] = materialsJson ? JSON.parse(materialsJson) : [];
+
+    // 2. Fetch IDs for all lookup values in parallel
+    const [
+      styleResult,
+      formalityResult,
+      warmthLevelResult,
+      colorsResult,
+      suitableWeathersResult,
+      suitableTimesOfDayResult,
+      suitablePlacesResult,
+      suitableOccasionsResult,
+      materialsResult
+    ] = await Promise.all([
+      sql`SELECT id FROM styles WHERE name = ${styleName}`,
+      sql`SELECT id FROM formalities WHERE name = ${formalityName}`,
+      sql`SELECT id FROM warmth_levels WHERE name = ${warmthLevelName}`,
+      colorNames.length > 0 ? sql`SELECT id FROM colors WHERE name = ANY(${colorNames})` : Promise.resolve([]),
+      suitableWeatherNames.length > 0 ? sql`SELECT id FROM suitable_weathers WHERE name = ANY(${suitableWeatherNames})` : Promise.resolve([]),
+      suitableTimeOfDayNames.length > 0 ? sql`SELECT id FROM suitable_times_of_day WHERE name = ANY(${suitableTimeOfDayNames})` : Promise.resolve([]),
+      suitablePlaceNames.length > 0 ? sql`SELECT id FROM suitable_places WHERE name = ANY(${suitablePlaceNames})` : Promise.resolve([]),
+      suitableOccasionNames.length > 0 ? sql`SELECT id FROM suitable_occasions WHERE name = ANY(${suitableOccasionNames})` : Promise.resolve([]),
+      materials.length > 0 ? sql`SELECT id, name FROM materials WHERE name = ANY(${materials.map(m => m.material)})` : Promise.resolve([])
+    ]);
+
+    const styleId = styleResult[0]?.id;
+    const formalityId = formalityResult[0]?.id;
+    const warmthLevelId = warmthLevelResult[0]?.id;
+
+    const colorIds = colorsResult.map((row: any) => row.id);
+    const suitableWeatherIds = suitableWeathersResult.map((row: any) => row.id);
+    const suitableTimeOfDayIds = suitableTimesOfDayResult.map((row: any) => row.id);
+    const suitablePlaceIds = suitablePlacesResult.map((row: any) => row.id);
+    const suitableOccasionIds = suitableOccasionsResult.map((row: any) => row.id);
+
+    const materialIdMap = new Map(materialsResult.map((m: any) => [m.name, m.id]));
+    const materialCompositionToInsert = materials.map(m => ({
+      id: materialIdMap.get(m.material),
+      percentage: m.percentage
+    })).filter(m => m.id !== undefined);
+
+    // 3. Insert the new garment and get its ID
+    const newGarmentResult = await sql`
+      INSERT INTO garments (file_name, model, brand, type, features, favorite, style_id, formality_id, warmth_level_id)
+      VALUES (${fileName}, ${model}, ${brand}, ${type}, ${features}, ${favorite}, ${styleId}, ${formalityId}, ${warmthLevelId})
+      RETURNING id;
+    `;
+    const newGarmentId = newGarmentResult[0].id;
+
+    // 4. Insert into junction tables
+    const insertPromises = [];
+
+    if (materialCompositionToInsert.length > 0) {
+      const materialIds = materialCompositionToInsert.map(m => m.id);
+      const percentages = materialCompositionToInsert.map(m => m.percentage);
+      insertPromises.push(sql`
+        INSERT INTO garment_material_composition (garment_id, material_id, percentage)
+        SELECT ${newGarmentId}, unnest(${materialIds}::int[]), unnest(${percentages}::int[])
+      `);
+    }
+
+    if (colorIds.length > 0) {
+      insertPromises.push(sql`
+        INSERT INTO garment_color (garment_id, color_id)
+        SELECT ${newGarmentId}, unnest(${colorIds}::int[])
+      `);
+    }
+    if (suitableWeatherIds.length > 0) {
+      insertPromises.push(sql`
+        INSERT INTO garment_suitable_weather (garment_id, suitable_weather_id)
+        SELECT ${newGarmentId}, unnest(${suitableWeatherIds}::int[])
+      `);
+    }
+    if (suitableTimeOfDayIds.length > 0) {
+      insertPromises.push(sql`
+        INSERT INTO garment_suitable_time_of_day (garment_id, suitable_time_of_day_id)
+        SELECT ${newGarmentId}, unnest(${suitableTimeOfDayIds}::int[])
+      `);
+    }
+    if (suitablePlaceIds.length > 0) {
+      insertPromises.push(sql`
+        INSERT INTO garment_suitable_place (garment_id, suitable_place_id)
+        SELECT ${newGarmentId}, unnest(${suitablePlaceIds}::int[])
+      `);
+    }
+    if (suitableOccasionIds.length > 0) {
+      insertPromises.push(sql`
+        INSERT INTO garment_suitable_occasion (garment_id, suitable_occasion_id)
+        SELECT ${newGarmentId}, unnest(${suitableOccasionIds}::int[])
+      `);
+    }
+
+    await Promise.all(insertPromises);
+
+    // 5. Revalidate cache
+    revalidateTag('garments');
+
+    // 6. Redirect to the new garment's page
+    redirect(`/garments/${newGarmentId}`);
+
+    // This part is technically unreachable due to redirect, but good for type safety
+    return { message: 'Garment created successfully!', status: 'success', newGarmentId };
+
+  } catch (error: any) {
+    if (error.digest?.startsWith('NEXT_REDIRECT')) {
+      throw error;
+    }
+    console.error('Failed to create garment:', error);
+    return { message: 'Failed to create garment.', status: 'error' };
+  }
 }
 
 export async function updateGarment(prevState: any, formData: FormData): Promise<{ message: string; status: string }> {
