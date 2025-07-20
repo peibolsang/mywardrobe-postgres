@@ -86,6 +86,10 @@ async function getSchema() {
   return JSON.parse(schemaFile);
 }
 
+export const metadata = {
+  title: "My Wardrobe - Garment Details",
+};
+
 export default async function GarmentPage({ params: paramsPromise }: { params: Promise<{ id: string }> }) {
   const params = await paramsPromise;
   const garment = await getGarment(params.id);
