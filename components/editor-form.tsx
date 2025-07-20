@@ -493,7 +493,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
   return (
     <div className={cn(
       "min-h-screen bg-gray-100 flex flex-col items-center p-4",
-      isNewGarmentModeProp ? "justify-start pt-16" : "justify-center"
+      isNewGarmentModeProp ? "justify-start pt-16" : "justify-start pt-16"
     )}>
       <Toaster />
 
@@ -540,15 +540,14 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
           </CardHeader>
           <CardContent>
             <div className="flex flex-col md:flex-row gap-6">
-              <div className="md:w-1/2 flex flex-col items-center justify-start p-4">
+              <div className="md:w-1/2 flex flex-col items-center justify-start p-4 relative h-96">
                 {currentGarment.file_name && (
                   <Image
                     key={currentGarment.file_name}
                     src={currentGarment.file_name}
                     alt={currentGarment.model}
-                    width={400}
-                    height={400}
-                    objectFit="contain"
+                    fill
+                    className="object-contain"
                   />
                 )}
               </div>
