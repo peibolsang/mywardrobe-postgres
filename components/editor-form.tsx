@@ -529,7 +529,7 @@ export default function EditorForm() { // Removed props from function signature
               <Button
                 variant="ghost"
                 size="icon"
-                className="absolute top-4 right-4 text-gray-400 hover:text-red-500"
+                className="absolute top-4 right-4 text-gray-400 hover:text-red-500 cursor-pointer"
                 onClick={() => handleToggleFavorite(currentGarment.id!, currentGarment.favorite)} // Pass current favorite status
               >
                 <FiHeart fill={currentGarment.favorite ? 'red' : 'none'} />
