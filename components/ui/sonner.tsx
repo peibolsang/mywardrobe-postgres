@@ -22,8 +22,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
       }
       {...props}
       toastOptions={{
-        success: {
-          className: "bg-green-200 text-green-800 border-green-400",
+        classNames: {
+          success: "bg-green-200 text-green-800 border-green-400",
         },
       }}
     />
