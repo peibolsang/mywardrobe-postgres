@@ -12,28 +12,54 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
   const sql = neon(process.env.DATABASE_URL!);
   try {
     const id = parseInt(formData.get('id') as string);
-    const fileName = formData.get('file_name') as string;
-    const model = formData.get('model') as string;
-    const brand = formData.get('brand') as string;
-    const type = formData.get('type') as string;
-    const features = formData.get('features') as string;
-    const favorite = formData.get('favorite') === 'on';
 
+    // Fetch existing garment data
+    const existingGarmentResult = await sql`SELECT * FROM garments WHERE id = ${id}`;
+    if (existingGarmentResult.length === 0) {
+      return { message: 'Garment not found.', status: 'error' };
+    }
+    const existingGarment = existingGarmentResult[0];
+
+    const fileName = (formData.get('file_name') as string) || existingGarment.file_name;
+    const model = (formData.get('model') as string) || existingGarment.model;
+    const brand = (formData.get('brand') as string) || existingGarment.brand;
+    const type = (formData.get('type') as string) || existingGarment.type;
+    const features = (formData.get('features') as string) || existingGarment.features;
+    const favorite = formData.has('favorite') ? (formData.get('favorite') === 'on') : existingGarment.favorite;
+
+    // Get names for single-select lookup fields
     // Get names for single-select lookup fields
     const styleName = formData.get('style') as string;
     const formalityName = formData.get('formality') as string;
     const warmthLevelName = formData.get('warmthLevel') as string;
 
     // Get names for multi-select lookup fields (assuming comma-separated names)
-    const colorNames = (formData.get('colors') as string)?.split(',').filter(Boolean) || [];
-    const suitableWeatherNames = (formData.get('suitableWeathers') as string)?.split(',').filter(Boolean) || [];
-    const suitableTimeOfDayNames = (formData.get('suitableTimesOfDay') as string)?.split(',').filter(Boolean) || [];
-    const suitablePlaceNames = (formData.get('suitablePlaces') as string)?.split(',').filter(Boolean) || [];
-    const suitableOccasionNames = (formData.get('suitableOccasions') as string)?.split(',').filter(Boolean) || [];
+    // For multi-selects, if formData is empty, we should retain existing associations.
+    // This requires fetching existing associations first.
+    const existingColors = await sql`SELECT c.name FROM colors c JOIN garment_color gc ON c.id = gc.color_id WHERE gc.garment_id = ${id}`;
+    const existingColorNames = existingColors.map((row: any) => row.name);
+    const colorNames = (formData.get('colors') as string)?.split(',').filter(Boolean) || existingColorNames;
+
+    const existingSuitableWeathers = await sql`SELECT sw.name FROM suitable_weathers sw JOIN garment_suitable_weather gsw ON sw.id = gsw.suitable_weather_id WHERE gsw.garment_id = ${id}`;
+    const existingSuitableWeatherNames = existingSuitableWeathers.map((row: any) => row.name);
+    const suitableWeatherNames = (formData.get('suitableWeathers') as string)?.split(',').filter(Boolean) || existingSuitableWeatherNames;
+
+    const existingSuitableTimesOfDay = await sql`SELECT st.name FROM suitable_times_of_day st JOIN garment_suitable_time_of_day gstd ON st.id = gstd.suitable_time_of_day_id WHERE gstd.garment_id = ${id}`;
+    const existingSuitableTimeOfDayNames = existingSuitableTimesOfDay.map((row: any) => row.name);
+    const suitableTimeOfDayNames = (formData.get('suitableTimesOfDay') as string)?.split(',').filter(Boolean) || existingSuitableTimeOfDayNames;
+
+    const existingSuitablePlaces = await sql`SELECT sp.name FROM suitable_places sp JOIN garment_suitable_place gsp ON sp.id = gsp.suitable_place_id WHERE gsp.garment_id = ${id}`;
+    const existingSuitablePlaceNames = existingSuitablePlaces.map((row: any) => row.name);
+    const suitablePlaceNames = (formData.get('suitablePlaces') as string)?.split(',').filter(Boolean) || existingSuitablePlaceNames;
+
+    const existingSuitableOccasions = await sql`SELECT so.name FROM suitable_occasions so JOIN garment_suitable_occasion gso ON so.id = gso.suitable_occasion_id WHERE gso.garment_id = ${id}`;
+    const existingSuitableOccasionNames = existingSuitableOccasions.map((row: any) => row.name);
+    const suitableOccasionNames = (formData.get('suitableOccasions') as string)?.split(',').filter(Boolean) || existingSuitableOccasionNames;
 
     // Materials are complex, assuming a JSON string for now
     const materialsJson = formData.get('materials') as string;
     let materials: { material: string; percentage: number }[] = [];
+
     if (materialsJson) {
       try {
         materials = JSON.parse(materialsJson).map((m: any) => ({
@@ -44,6 +70,10 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
         console.error('Failed to parse materials JSON:', e);
         return { message: 'Error: Invalid materials data.', status: 'error' };
       }
+    } else {
+      // If no new materials are provided, fetch existing ones
+      const existingMaterials = await sql`SELECT m.name as material, gm.percentage FROM materials m JOIN garment_material_composition gm ON m.id = gm.material_id WHERE gm.garment_id = ${id}`;
+      materials = existingMaterials.map((m: any) => ({ material: m.material, percentage: m.percentage }));
     }
 
     // Fetch material IDs based on names
@@ -77,9 +107,9 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
       sql`SELECT id FROM suitable_occasions WHERE name = ANY(${suitableOccasionNames})`,
     ]);
 
-    const styleId = styleResult[0]?.id;
-    const formalityId = formalityResult[0]?.id;
-    const warmthLevelId = warmthLevelResult[0]?.id;
+    const styleId = styleResult[0]?.id || existingGarment.style_id;
+    const formalityId = formalityResult[0]?.id || existingGarment.formality_id;
+    const warmthLevelId = warmthLevelResult[0]?.id || existingGarment.warmth_level_id;
 
     const colorIds = colorsResult.map((row: any) => row.id);
     const suitableWeatherIds = suitableWeathersResult.map((row: any) => row.id);
