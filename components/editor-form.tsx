@@ -1,8 +1,8 @@
 "use client";
 
 import { FavoriteButton } from './client/favorite-button';
-import { useState, useEffect } from 'react'; // Removed useRef
-
+import { useState, useEffect, useRef, useTransition } from 'react';
+import { upload } from '@vercel/blob/client';
 import Image from 'next/image';
 import Link from 'next/link';
 import { Toaster } from '../components/ui/sonner';
@@ -68,9 +68,13 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
   const [schemaData, setSchemaData] = useState<Schema | null>(null); // Initialize as null
   const [currentIndex, setCurrentIndex] = useState(0);
   const [formData, setFormData] = useState<GarmentFormData | null>(null); // Use GarmentFormData for form state
+  const inputFileRef = useRef<HTMLInputElement>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
   
   const [isNewGarmentMode, setIsNewGarmentMode] = useState(isNewGarmentModeProp);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+
+  const [isPending, startTransition] = useTransition();
 
   // useActionState for form submission feedback
   const [createState, createFormAction] = useActionState(createGarment, { message: '', status: '' });
@@ -171,6 +175,19 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
     setCurrentIndex((prevIndex) =>
       prevIndex === 0 ? wardrobeData.length - 1 : prevIndex - 1
     );
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      setImagePreview(null);
+    }
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -342,11 +359,10 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
             <>
               <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
               <Input
-                type="text"
+                type="file"
                 name={key}
-                value={value}
-                onChange={handleChange}
-                placeholder={placeholderText}
+                ref={inputFileRef}
+                onChange={handleFileChange}
                 className={hasError ? 'border-red-500' : ''}
               />
               {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
@@ -546,7 +562,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
               <div className="md:w-1/2 flex flex-col items-center justify-start p-4 relative">
                 <Image
                   key={currentGarment.file_name || 'placeholder'}
-                  src={currentGarment.file_name || '/placeholder.png'}
+                  src={imagePreview || currentGarment.file_name || '/placeholder.png'}
                   alt={currentGarment.model || 'Placeholder Image'}
                   width={400}
                   height={400}
@@ -554,7 +570,32 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                 />
               </div>
 
-              <form action={isNewGarmentMode ? createFormAction : updateFormAction} className="md:w-1/2 p-4">
+              <form
+                className="md:w-1/2 p-4"
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  const form = event.target as HTMLFormElement;
+                  const formDataForAction = new FormData(form);
+
+                  const file = inputFileRef.current?.files?.[0];
+
+                  if (file) {
+                    const newBlob = await upload(file.name, file, {
+                      access: 'public',
+                      handleUploadUrl: '/api/upload',
+                    });
+                    formDataForAction.set('file_name', newBlob.url);
+                  } else if (!isNewGarmentMode) {
+                    formDataForAction.set('file_name', currentGarment?.file_name || '');
+                  }
+
+                  if (isNewGarmentMode) {
+                    startTransition(() => createFormAction(formDataForAction));
+                  } else {
+                    startTransition(() => updateFormAction(formDataForAction));
+                  }
+                }}
+              >
                 {/* Hidden input for ID when updating */}
                 {currentGarment.id && (
                   <input type="hidden" name="id" value={currentGarment.id} />
