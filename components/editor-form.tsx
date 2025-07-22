@@ -70,6 +70,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
   const [formData, setFormData] = useState<GarmentFormData | null>(null); // Use GarmentFormData for form state
   const inputFileRef = useRef<HTMLInputElement>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
   
   const [isNewGarmentMode, setIsNewGarmentMode] = useState(isNewGarmentModeProp);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
@@ -180,12 +181,14 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setFileName(file.name);
       const reader = new FileReader();
       reader.onloadend = () => {
         setImagePreview(reader.result as string);
       };
       reader.readAsDataURL(file);
     } else {
+      setFileName(null);
       setImagePreview(null);
     }
   };
@@ -358,13 +361,30 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
           return (
             <>
               <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
-              <Input
-                type="file"
-                name={key}
-                ref={inputFileRef}
-                onChange={handleFileChange}
-                className={hasError ? 'border-red-500' : ''}
-              />
+              <div className="flex items-center">
+                <Input
+                  type="file"
+                  name={key}
+                  ref={inputFileRef}
+                  onChange={handleFileChange}
+                  className={cn(
+                    hasError ? 'border-red-500' : '',
+                    'file:bg-primary file:text-primary-foreground file:hover:bg-primary/90 file:mr-4 file:px-4 file:py-2 file:rounded-lg'
+                  )}
+                  style={{ display: 'none' }} // Hide the default input
+                />
+                <Button
+                  type="button"
+                  onClick={() => inputFileRef.current?.click()} // Trigger the hidden file input
+                  variant="outline"
+                  className="mr-4 hover:bg-gray-100"
+                >
+                  Choose File
+                </Button>
+                <span className="text-sm text-gray-500">
+                  {fileName || (currentGarment.file_name ? currentGarment.file_name.split('/').pop() : 'No file chosen')}
+                </span>
+              </div>
               {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
             </>
           );
@@ -622,11 +642,13 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                     <AccordionTrigger>Basic Information</AccordionTrigger>
                     <AccordionContent>
                       <div>
-                        <div>
+                        <div className="mb-4">
                           {renderInputField('file_name', { type: 'string', description: 'Image file' }, currentGarment.file_name)}
+                          </div>
+                        <div className="mb-4">
                           {renderInputField('model', schemaProperties.model, currentGarment.model)}
                         </div>
-                        <div className="mb-4 mt-4">
+                        <div className="mb-4">
                           {renderInputField('brand', schemaProperties.brand, currentGarment.brand)}
                         </div>
                         <div className="mb-4">
