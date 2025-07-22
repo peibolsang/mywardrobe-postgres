@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { FiFilter, FiHeart } from 'react-icons/fi';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
+import { cn } from '@/lib/utils';
 
 interface Garment {
   id: number;
@@ -250,7 +251,7 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
             <FiFilter />
           </Button>
           <Button variant="outline" onClick={toggleShowOnlyFavorites} className="ml-2">
-            <FiHeart fill={showOnlyFavorites ? 'red' : 'none'} />
+            <FiHeart fill={showOnlyFavorites ? 'red' : 'none'} className={showOnlyFavorites ? 'text-red-500' : ''} />
           </Button>
         </div>
         

@@ -21,16 +21,16 @@ export function FavoriteButton({ isFavorite, onClick }: FavoriteButtonProps) {
 
   return (
     <Button
-      variant="ghost"
+      variant="outline"
       size="icon"
-      className="absolute top-4 right-4 text-gray-400 hover:text-red-500 cursor-pointer"
+      className="absolute top-4 right-4"
       onClick={handleClick}
       disabled={isLoading}
     >
       {isLoading ? (
         <Loader2 className="h-4 w-4 animate-spin" />
       ) : (
-        <FiHeart fill={isFavorite ? 'red' : 'none'} />
+        <FiHeart fill={isFavorite ? 'red' : 'none'} className={isFavorite ? 'text-red-500' : ''} />
       )}
     </Button>
   );

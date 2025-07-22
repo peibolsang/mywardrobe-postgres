@@ -541,7 +541,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
           <Button onClick={handlePrev} variant="outline">
             Previous
           </Button>
-          <span className="text-xl">
+          <span className="text-sm">
             {currentIndex + 1} / {wardrobeData.length}
           </span>
           <Button onClick={handleNext} variant="outline">
