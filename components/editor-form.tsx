@@ -382,7 +382,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                   Choose File
                 </Button>
                 <span className="text-sm text-gray-500">
-                  {fileName || (currentGarment.file_name ? currentGarment.file_name.split('/').pop() : 'No file chosen')}
+                  {fileName || (currentGarment && currentGarment.file_name ? currentGarment.file_name.split('/').pop() : 'No file chosen')}
                 </span>
               </div>
               {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
