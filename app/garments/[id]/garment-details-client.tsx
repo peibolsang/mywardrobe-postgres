@@ -70,7 +70,7 @@ export default function GarmentDetailsClient({ garment, schema }: { garment: Gar
                   alt={garment.model}
                   width={400}
                   height={400}
-                  objectFit="contain"
+                  className="object-contain"
                 />
               )}
             </div>

@@ -586,7 +586,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                   alt={currentGarment.model || 'Placeholder Image'}
                   width={400}
                   height={400}
-                  objectFit="contain"
+                  className="object-contain"
                 />
               </div>
 

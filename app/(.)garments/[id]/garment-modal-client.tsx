@@ -28,8 +28,7 @@ export default function GarmentModalClient({ garment }: { garment: Garment }) {
             alt={garment.model}
             width={800}
             height={800}
-            objectFit="contain"
-            className="max-w-full max-h-full"
+            className="max-w-full max-h-full object-contain"
           />
         </div>
       </DialogContent>

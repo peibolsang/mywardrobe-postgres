@@ -270,8 +270,7 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
                       alt={garment.model}
                       width={400}
                       height={400}
-                      objectFit="contain"
-                      className="cursor-pointer"
+                      className="cursor-pointer object-contain"
                     />
                   </Link>
                 </div>
