@@ -3,8 +3,37 @@
 import { neon } from '@neondatabase/serverless';
 import { revalidateTag } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { auth } from '@/lib/auth';
+import 'server-only';
+
+// ─────────────────────────────────────────────────────────────
+// Access control
+// ─────────────────────────────────────────────────────────────
+const OWNER_EMAIL = (process.env.EDITOR_OWNER_EMAIL)?.toLowerCase();
+
+async function requireOwner<T extends { message: string; status: string }>(
+  unauthorized: T
+): Promise<{ ok: true } | { ok: false; result: T }> {
+  const session = await auth();
+  const email = session?.user?.email?.toLowerCase();
+
+  if (!email) return { ok: false, result: unauthorized };            // 401-ish
+  if (email !== OWNER_EMAIL) return { ok: false, result: unauthorized }; // 403-ish
+  return { ok: true };
+}
+
+// Helper so callers get consistent error shape
+const UNAUTHORIZED_RESULT = { message: 'Forbidden', status: 'error' } as const;
+
+// ─────────────────────────────────────────────────────────────
+// Create
+// ─────────────────────────────────────────────────────────────
 
 export async function createGarment(prevState: any, formData: FormData): Promise<{ message: string; status: string; newGarmentId?: number }> {
+
+  const gate = await requireOwner(UNAUTHORIZED_RESULT);
+  if (!gate.ok) return gate.result;
+
   const sql = neon(process.env.DATABASE_URL!);
 
   try {
@@ -143,6 +172,10 @@ export async function createGarment(prevState: any, formData: FormData): Promise
 }
 
 export async function updateGarment(prevState: any, formData: FormData): Promise<{ message: string; status: string }> {
+
+  const gate = await requireOwner(UNAUTHORIZED_RESULT);
+  if (!gate.ok) return gate.result;
+
   const sql = neon(process.env.DATABASE_URL!);
   try {
     const id = parseInt(formData.get('id') as string);
@@ -336,6 +369,9 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
 }
 
 export async function deleteGarment(id: number) {
+  const gate = await requireOwner(UNAUTHORIZED_RESULT);
+  if (!gate.ok) return gate.result;
+
   const sql = neon(process.env.DATABASE_URL!);
   return { message: 'Garment deleted successfully!' };
 }
