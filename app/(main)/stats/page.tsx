@@ -1,5 +1,7 @@
-import StatsChart from '../../components/stats-chart';
+import StatsChart from '@/components/stats-chart';
 import { ChartConfig } from '@/components/ui/chart';
+import { auth } from '@/lib/auth';
+import { redirect } from 'next/navigation';
 
 interface Garment {
   id: number;
@@ -38,12 +40,17 @@ const generateChartConfig = (garmentTypes: string[]): ChartConfig => {
 };
 
 export default async function StatsPage() {
+  const session = await auth();
+  if (!session) {
+    redirect('/login');
+  }
+
   let chartConfig: ChartConfig = {};
   let chartData: { name: string; value: number; fill: string }[] = [];
   let error: string | null = null;
 
   try {
-    const response = await (await import('../api/wardrobe/route')).GET();
+    const response = await (await import('@/app/api/wardrobe/route')).GET();
 
     const data: Garment[] = await response.json();
 

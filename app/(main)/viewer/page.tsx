@@ -1,6 +1,8 @@
 import { Suspense } from 'react';
-import WardrobeViewerClient from '../../components/wardrobe-viewer-client';
-import WardrobeViewerSkeleton from '../../components/wardrobe-viewer-skeleton';
+import WardrobeViewerClient from '@/components/wardrobe-viewer-client';
+import WardrobeViewerSkeleton from '@/components/wardrobe-viewer-skeleton';
+import { auth } from '@/lib/auth';
+import { redirect } from 'next/navigation';
 
 interface Garment {
   id: number;
@@ -35,6 +37,11 @@ interface AvailableFilters {
 }
 
 export default async function WardrobeViewerPage() {
+  const session = await auth();
+  if (!session) {
+    redirect('/login');
+  }
+
   let wardrobeData: Garment[] = [];
   let availableFilters: AvailableFilters = {
     brand: [],
@@ -46,7 +53,7 @@ export default async function WardrobeViewerPage() {
   let error: string | null = null;
 
   try {
-    const wardrobeRes = await (await import('../api/wardrobe/route')).GET();
+    const wardrobeRes = await (await import('@/app/api/wardrobe/route')).GET();
 
     const wardrobeJson: Garment[] = await wardrobeRes.json();
     const bodyPartOrder = ['Jacket', 'Sweatshirt', 'Shirt', 'Polo Shirt', 'T-shirt', 'Blazer', 'Selvedge Jeans', 'Jeans', 'Pants', 'Shorts', 'Loafers', 'Sneakers'];

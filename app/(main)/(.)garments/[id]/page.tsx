@@ -1,6 +1,6 @@
 
 import { Garment } from "@/lib/types";
-import GarmentModalClient from "./garment-modal-client";
+import GarmentModalClient from "@/components/client/garment-modal-client";
 import { neon } from '@neondatabase/serverless';
 
 async function getGarment(id: string): Promise<Garment | null> {

@@ -1,6 +1,6 @@
 import { sql } from "@/lib/db";
 import { Garment } from "@/lib/types";
-import GarmentDetailsClient from "./garment-details-client";
+import GarmentDetailsClient from "@/components/client/garment-details-client";
 import { promises as fs } from 'fs';
 import path from 'path';
 

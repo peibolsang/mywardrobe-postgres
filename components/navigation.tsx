@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import { useState, useEffect } from "react";
+import { useSession, signIn, signOut } from "next-auth/react";
 
 const links = [
   { href: "/viewer", label: "My Wardrobe" },
@@ -14,13 +15,14 @@ const links = [
 export function Navigation() {
   const pathname = usePathname() || '';
   const [mounted, setMounted] = useState(false);
+  const { data: session } = useSession();
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
   return (
-    <nav className="flex justify-center my-8">
+    <nav className="flex justify-between items-center my-8 mx-4">
       <ul className="flex items-center space-x-4">
         {links.map(({ href, label }) => (
           <li key={href}>
@@ -39,6 +41,17 @@ export function Navigation() {
           </li>
         ))}
       </ul>
+      <div>
+        {session ? (
+          <button onClick={() => signOut()} className="px-4 py-2 text-lg font-medium transition-colors text-muted-foreground hover:text-primary">
+            Sign Out
+          </button>
+        ) : (
+          <Link href="/login">
+            <span className="px-4 py-2 text-lg font-medium transition-colors text-muted-foreground hover:text-primary">Sign In</span>
+          </Link>
+        )}
+      </div>
     </nav>
   );
 }
