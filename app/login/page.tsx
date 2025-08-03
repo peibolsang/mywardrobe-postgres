@@ -22,7 +22,7 @@ export default function LoginPage() {
     return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100">
       {/* Header */}
-      <header className="container mx-auto px-4 py-6">
+      <header className="container mx-auto py-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <div className="w-8 h-8 bg-gradient-to-br from-slate-800 to-slate-600 rounded-lg flex items-center justify-center">
