@@ -4,9 +4,9 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
-import { FiFilter, FiHeart } from 'react-icons/fi';
+import { FiFilter, FiHeart, FiPlus } from 'react-icons/fi';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
 import { cn } from '@/lib/utils';
 
@@ -88,6 +88,17 @@ const colorMap: { [key: string]: string } = {
   "washed grey": "#A8A8A8",
   // Add any other non-standard colors here
 };
+
+const AddNewGarmentCard = () => (
+  <Link href="/add-garment" passHref>
+    <Card className="flex flex-col items-center justify-center text-center relative bg-gray-200 hover:bg-gray-300 transition-colors duration-200 cursor-pointer h-full">
+      <CardContent className="flex flex-col items-center justify-center text-center">
+        <FiPlus className="text-6xl text-gray-500" />
+        <p className="mt-2 text-sm text-gray-600">Add New Garment</p>
+      </CardContent>
+    </Card>
+  </Link>
+);
 
 export default function WardrobeViewerClient({ initialWardrobeData, initialAvailableFilters }: WardrobeViewerClientProps) {
   const [wardrobeData, setWardrobeData] = useState<Garment[]>(initialWardrobeData);
@@ -197,7 +208,7 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
       
 
       {/* Side Navigation Bar (Drawer) */}
-      <div className={`fixed inset-y-0 left-0 w-1/5 bg-gray-200 border-r border-gray-300 transform transition-transform duration-300 ease-in-out ${isFilterDrawerOpen ? 'translate-x-0' : '-translate-x-full'} z-20 overflow-y-auto`}>
+      <div className={cn('fixed inset-y-0 left-0 w-1/5 bg-gray-200 border-r border-gray-300 transform transition-transform duration-300 ease-in-out z-20 overflow-y-auto', isFilterDrawerOpen ? 'translate-x-0' : '-translate-x-full')}>
         
         <div className="px-4 mb-4 mt-4" style={{ minHeight: '40px' }}> {/* Approximate height of the button */}
           {isAnyFilterSelected && (
@@ -244,19 +255,20 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
       </div>
 
       {/* Main Content Area */}
-      <div className={`flex-1 p-4 flex flex-col items-center transition-all duration-300 ease-in-out ${isFilterDrawerOpen ? 'ml-[20%]' : 'ml-0'}`}>
+      <div className={cn('flex-1 p-4 flex flex-col items-center transition-all duration-300 ease-in-out', isFilterDrawerOpen ? 'ml-[20%]' : 'ml-0')}>
         {/* Filter Button */}
         <div className="w-full flex justify-start mb-4 max-w-6xl mx-auto">
           <Button variant="outline" onClick={toggleFilterDrawer}>
             <FiFilter />
           </Button>
           <Button variant="outline" onClick={toggleShowOnlyFavorites} className="ml-2">
-            <FiHeart fill={showOnlyFavorites ? 'red' : 'none'} className={showOnlyFavorites ? 'text-red-500' : ''} />
+            <FiHeart fill={showOnlyFavorites ? 'red' : 'none'} className={cn('transition-colors', showOnlyFavorites ? 'text-red-500' : 'text-gray-500')} />
           </Button>
         </div>
         
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-6 w-full max-w-6xl">
+          <AddNewGarmentCard />
           {filteredWardrobe.map((garment) => (
             <Card key={garment.file_name} className="flex flex-col items-center text-center relative">
               {garment.favorite && (

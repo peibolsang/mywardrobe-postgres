@@ -131,7 +131,7 @@ export function Navigation() {
                 <Button variant="ghost" className="relative h-10 w-10 rounded-full">
                   <Avatar className="h-10 w-10 ring-2 ring-primary/20 transition-all hover:ring-primary/40">
                     <AvatarImage src={session?.user?.image || undefined} alt={displayName || "User"} />
-                    <AvatarFallback className="bg-gradient-to-r from-slate-700 to-blue-600 hover:from-slate-800 hover:to-blue-700 text-white font-semibold">
+                    <AvatarFallback className="bg-black text-white font-semibold">
                       {userInitials}
                     </AvatarFallback>
                   </Avatar>
