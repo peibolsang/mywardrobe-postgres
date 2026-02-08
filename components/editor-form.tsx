@@ -265,6 +265,11 @@ export default function EditorForm({
     const file = e.target.files?.[0];
     if (file) {
       setFileName(file.name);
+      setValidationErrors((prev) => {
+        if (!prev.file_name) return prev;
+        const { file_name, ...rest } = prev;
+        return rest;
+      });
       const reader = new FileReader();
       reader.onloadend = () => {
         setImagePreview(reader.result as string);
@@ -414,6 +419,15 @@ export default function EditorForm({
 
     requiredFields.forEach(key => {
       const value = (data as any)[key];
+      if (key === 'file_name') {
+        const hasExistingFileName = typeof value === 'string' && value.trim() !== '';
+        const hasSelectedFile = Boolean(inputFileRef.current?.files?.length);
+        if (!hasExistingFileName && !hasSelectedFile) {
+          errors[key] = 'This field is required';
+        }
+        return;
+      }
+
       if (typeof value === 'string' && value.trim() === '') {
         errors[key] = 'This field is required';
       } else if (Array.isArray(value) && value.length === 0) {
