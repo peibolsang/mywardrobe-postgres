@@ -61,6 +61,7 @@ export default function GarmentDetailsClient({
 
   const sortedMaterials = [...(garment.material_composition ?? [])].sort((a, b) => b.percentage - a.percentage);
   const colors = garment.color_palette ?? [];
+  const primaryMaterial = sortedMaterials[0]?.material ?? 'Material N/A';
   const detailsGridClass = canEdit
     ? 'grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-start'
     : 'grid gap-4';
@@ -123,6 +124,17 @@ export default function GarmentDetailsClient({
                   No image available
                 </div>
               )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">
+                {garment.style || 'Style N/A'}
+              </span>
+              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-900">
+                {garment.formality || 'Formality N/A'}
+              </span>
+              <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-medium text-white">
+                {primaryMaterial}
+              </span>
             </div>
           </CardContent>
         </Card>

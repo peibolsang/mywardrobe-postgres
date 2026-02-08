@@ -62,6 +62,7 @@ Use imperative commit subjects.
 1. Server components (`app/(main)/*`) handle initial auth checks and data loading.
 2. Client components (`components/client/*` and interactive feature components) manage filters, dialogs, local form state, toasts, and URL state.
 3. Server actions (`actions/garment.ts`) own write operations, authorization checks, redirects, and cache invalidation.
+4. Editor pages (`/editor`, `/add-garment`) preload wardrobe/schema/editor-options server-side and render `EditorForm` inside `Suspense` with a layout-matching skeleton fallback to avoid empty-state flash and layout shift.
 
 ## Authorization strategy
 - `EDITOR_OWNER_EMAIL` is the single source of truth for editor authorization.
@@ -109,6 +110,7 @@ Use imperative commit subjects.
 
 ##  Forms and form actions
 - `components/editor-form.tsx` uses controlled inputs and `useActionState` with `createGarment`/`updateGarment`.
+- `EditorForm` accepts optional server-preloaded initial props (`initialWardrobeData`, `initialSchemaData`, `initialEditorOptions`) so it can hydrate without client-side fetch flicker.
 - Non-native controls (comboboxes/multi-selects) are submitted via hidden fields in `FormData`.
 - Array fields (`colors`, suitability arrays) are serialized as JSON strings (not comma-joined text) to preserve values safely.
 - Server actions parse JSON array fields with backward-compatible fallback for legacy comma-joined payloads.
