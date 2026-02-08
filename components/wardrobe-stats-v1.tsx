@@ -67,11 +67,27 @@ const coverageBarClass = (percentage: number): string => {
   return "bg-emerald-500";
 };
 
-const heatCellClass = (count: number): string => {
-  if (count === 0) return "bg-red-50 text-red-700";
-  if (count === 1) return "bg-amber-50 text-amber-700";
-  if (count <= 3) return "bg-yellow-50 text-yellow-700";
-  return "bg-emerald-50 text-emerald-700";
+const heatCellClass = (): string => "border p-2 text-center font-medium";
+
+const heatCellStyle = (count: number, maxCount: number): React.CSSProperties => {
+  if (maxCount <= 0) {
+    return {
+      backgroundColor: "hsl(0 80% 50%)",
+      color: "hsl(0 0% 100%)",
+    };
+  }
+
+  const ratio = Math.max(0, Math.min(1, count / maxCount));
+  // Continuous scale: red (low) -> yellow (mid) -> bright green (high).
+  const hue = ratio * 120;
+  const saturation = 82;
+  const lightness = 50 + (ratio * 6);
+  const textColor = ratio < 0.16 ? "hsl(0 0% 100%)" : "hsl(210 30% 14%)";
+
+  return {
+    backgroundColor: `hsl(${hue.toFixed(0)} ${saturation}% ${lightness.toFixed(0)}%)`,
+    color: textColor,
+  };
 };
 
 export default function WardrobeStatsV1({
@@ -102,6 +118,13 @@ export default function WardrobeStatsV1({
         </TooltipContent>
       </Tooltip>
     </span>
+  );
+
+  const heatmapMax = Math.max(
+    0,
+    ...heatmap.occasions.flatMap((occasion) =>
+      heatmap.weathers.map((weather) => heatmap.counts[occasion]?.[weather] ?? 0)
+    )
   );
 
   return (
@@ -271,7 +294,11 @@ export default function WardrobeStatsV1({
                       {heatmap.weathers.map((weather) => {
                         const count = heatmap.counts[occasion]?.[weather] ?? 0;
                         return (
-                          <td key={`${occasion}-${weather}`} className={`border p-2 text-center ${heatCellClass(count)}`}>
+                          <td
+                            key={`${occasion}-${weather}`}
+                            className={heatCellClass()}
+                            style={heatCellStyle(count, heatmapMax)}
+                          >
                             {count}
                           </td>
                         );
