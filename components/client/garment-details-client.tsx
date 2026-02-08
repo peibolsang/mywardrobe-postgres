@@ -106,7 +106,6 @@ export default function GarmentDetailsClient({ garment, schema }: { garment: Gar
                 <AccordionItem value="suitability">
                   <AccordionTrigger>Suitability</AccordionTrigger>
                   <AccordionContent>
-                    {renderReadOnlyField('warmth_level', schemaProperties.warmth_level, garment.warmth_level)}
                     {renderReadOnlyField('suitable_weather', schemaProperties.suitable_weather, garment.suitable_weather)}
                     {renderReadOnlyField('suitable_time_of_day', schemaProperties.suitable_time_of_day, garment.suitable_time_of_day)}
                     {renderReadOnlyField('suitable_places', schemaProperties.suitable_places, garment.suitable_places)}

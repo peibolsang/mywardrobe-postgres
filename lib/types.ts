@@ -8,7 +8,6 @@ export interface Garment {
   formality: string;
   material_composition: MaterialComposition[];
   color_palette: string[];
-  warmth_level: string;
   suitable_weather: string[];
   suitable_time_of_day: string[];
   suitable_places: string[];

@@ -1,26 +1,9 @@
 import StatsChart from '@/components/stats-chart';
 import { ChartConfig } from '@/components/ui/chart';
 import { auth } from '@/lib/auth';
+import { getWardrobeData } from '@/lib/wardrobe';
+import type { Garment } from '@/lib/types';
 import { redirect } from 'next/navigation';
-
-interface Garment {
-  id: number;
-  file_name: string;
-  model: string;
-  brand: string;
-  type: string;
-  style: string;
-  formality: string;
-  material_composition: any[]; // Simplified for stats
-  color_palette: string[];
-  warmth_level: string;
-  suitable_weather: string[];
-  suitable_time_of_day: string[];
-  suitable_places: string[];
-  suitable_occasions: string[];
-  features: string;
-  favorite?: boolean;
-}
 
 const generateChartConfig = (garmentTypes: string[]): ChartConfig => {
   const config: ChartConfig = {
@@ -50,9 +33,7 @@ export default async function StatsPage() {
   let error: string | null = null;
 
   try {
-    const response = await (await import('@/app/api/wardrobe/route')).GET();
-
-    const data: Garment[] = await response.json();
+    const data = await getWardrobeData();
 
     const garmentTypeCounts: { [key: string]: number } = {};
     data.forEach((item) => {

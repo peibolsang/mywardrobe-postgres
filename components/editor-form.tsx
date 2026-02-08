@@ -1,7 +1,7 @@
 "use client";
 
 import { FavoriteButton } from './client/favorite-button';
-import { useState, useEffect, useRef, useTransition } from 'react';
+import { useState, useEffect, useRef, useTransition, useCallback } from 'react';
 import { upload } from '@vercel/blob/client';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -14,6 +14,8 @@ import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Label } from '../components/ui/label';
 import { MultiSelect } from '../components/ui/multi-select';
+import { CreatableCombobox } from '../components/ui/creatable-combobox';
+import { CreatableMultiSelect } from '../components/ui/creatable-multi-select';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
 import { cn } from '../lib/utils';
 import { createGarment, updateGarment, deleteGarment } from '@/actions/garment'; // Import Server Actions
@@ -32,7 +34,6 @@ interface Garment {
   formality: string; // Now a string name from lookup
   material_composition: { material: string; percentage: number }[];
   color_palette: string[];
-  warmth_level: string; // Now a string name from lookup
   suitable_weather: string[];
   suitable_time_of_day: string[];
   suitable_places: string[];
@@ -63,29 +64,75 @@ interface EditorFormProps {
   isNewGarmentMode?: boolean; // Optional prop to indicate new garment mode
 }
 
+interface EditorOptionsResponse {
+  types: string[];
+  materials: string[];
+  colors: string[];
+}
+
+const normalizeOptionValue = (value: string) => value.trim().toLowerCase();
+
+const mergeUniqueStrings = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+
+  for (const rawValue of values) {
+    const value = String(rawValue ?? '').trim();
+    if (!value) continue;
+
+    const key = normalizeOptionValue(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(value);
+  }
+
+  return merged.sort((a, b) => a.localeCompare(b));
+};
+
 export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = false }: EditorFormProps) {
   const [wardrobeData, setWardrobeData] = useState<Garment[]>([]); // Initialize as empty
   const [schemaData, setSchemaData] = useState<Schema | null>(null); // Initialize as null
+  const [typeOptions, setTypeOptions] = useState<string[]>([]);
+  const [materialOptions, setMaterialOptions] = useState<string[]>([]);
+  const [colorOptions, setColorOptions] = useState<string[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [formData, setFormData] = useState<GarmentFormData | null>(null); // Use GarmentFormData for form state
   const inputFileRef = useRef<HTMLInputElement>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   
-  const [isNewGarmentMode, setIsNewGarmentMode] = useState(isNewGarmentModeProp);
+  const isNewGarmentMode = isNewGarmentModeProp;
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
 
   const [isPending, startTransition] = useTransition();
+  const [isUploading, setIsUploading] = useState(false);
 
   // useActionState for form submission feedback
   const [createState, createFormAction] = useActionState(createGarment, { message: '', status: '' });
   const [updateState, updateFormAction] = useActionState(updateGarment, { message: '', status: '' });
+
+  const fetchFreshWardrobe = useCallback(async (): Promise<Garment[]> => {
+    const response = await fetch('/api/wardrobe?fresh=1', { cache: 'no-store' });
+    if (!response.ok) {
+      throw new Error('Failed to fetch wardrobe data');
+    }
+    return response.json() as Promise<Garment[]>;
+  }, []);
+
+  const fetchEditorOptions = useCallback(async (): Promise<EditorOptionsResponse> => {
+    const response = await fetch('/api/editor-options', { cache: 'no-store' });
+    if (!response.ok) {
+      throw new Error('Failed to fetch editor options');
+    }
+    return response.json() as Promise<EditorOptionsResponse>;
+  }, []);
   
 
   // Handle toast messages from Server Actions
   useEffect(() => {
     if (createState.message) {
       if (createState.message.includes('successfully')) {
+        setValidationErrors({});
         toast.success(createState.message);
       } else {
         toast.error(createState.message);
@@ -96,6 +143,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
   useEffect(() => {
     if (updateState.message) {
       if (updateState.message.includes('successfully')) {
+        setValidationErrors({});
         toast.success(updateState.message);
       } else {
         toast.error(updateState.message);
@@ -107,9 +155,25 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const wardrobeRes = await fetch('/api/wardrobe');
-        const wardrobeJson = await wardrobeRes.json();
+        const wardrobeJson = await fetchFreshWardrobe();
         setWardrobeData(wardrobeJson);
+
+        let editorOptions: EditorOptionsResponse = { types: [], materials: [], colors: [] };
+        try {
+          editorOptions = await fetchEditorOptions();
+        } catch (optionsError) {
+          console.error('Failed to fetch editor options, falling back to wardrobe-derived values:', optionsError);
+        }
+
+        const wardrobeTypeOptions = wardrobeJson.map((garment) => garment.type);
+        const wardrobeMaterialOptions = wardrobeJson.flatMap((garment) =>
+          garment.material_composition.map((material) => material.material)
+        );
+        const wardrobeColorOptions = wardrobeJson.flatMap((garment) => garment.color_palette);
+
+        setTypeOptions(mergeUniqueStrings([...editorOptions.types, ...wardrobeTypeOptions]));
+        setMaterialOptions(mergeUniqueStrings([...editorOptions.materials, ...wardrobeMaterialOptions]));
+        setColorOptions(mergeUniqueStrings([...editorOptions.colors, ...wardrobeColorOptions]));
 
         const schemaRes = await fetch('/schema.json'); // Assuming schema.json is in public
         const schemaJson = await schemaRes.json();
@@ -120,7 +184,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
       }
     };
     fetchData();
-  }, []); // Run once on mount
+  }, [fetchEditorOptions, fetchFreshWardrobe]); // Run once on mount
 
   
 
@@ -135,7 +199,6 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
       formality: '',
       material_composition: [],
       color_palette: [],
-      warmth_level: '',
       suitable_weather: [],
       suitable_time_of_day: [],
       suitable_places: [],
@@ -168,11 +231,27 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
     }
   }, [currentIndex, wardrobeData, isNewGarmentMode]);
 
+  useEffect(() => {
+    if (wardrobeData.length === 0) return;
+
+    const wardrobeTypeOptions = wardrobeData.map((garment) => garment.type);
+    const wardrobeMaterialOptions = wardrobeData.flatMap((garment) =>
+      garment.material_composition.map((material) => material.material)
+    );
+    const wardrobeColorOptions = wardrobeData.flatMap((garment) => garment.color_palette);
+
+    setTypeOptions((prevOptions) => mergeUniqueStrings([...prevOptions, ...wardrobeTypeOptions]));
+    setMaterialOptions((prevOptions) => mergeUniqueStrings([...prevOptions, ...wardrobeMaterialOptions]));
+    setColorOptions((prevOptions) => mergeUniqueStrings([...prevOptions, ...wardrobeColorOptions]));
+  }, [wardrobeData]);
+
   const handleNext = () => {
+    if (wardrobeData.length <= 1) return;
     setCurrentIndex((prevIndex) => (prevIndex + 1) % wardrobeData.length);
   };
 
   const handlePrev = () => {
+    if (wardrobeData.length <= 1) return;
     setCurrentIndex((prevIndex) =>
       prevIndex === 0 ? wardrobeData.length - 1 : prevIndex - 1
     );
@@ -259,6 +338,20 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
     });
   };
 
+  const handleMaterialNameChange = (index: number, materialName: string) => {
+    setFormData((prevData) => {
+      if (!prevData) return null;
+      const newMaterialComposition = [...prevData.material_composition];
+      newMaterialComposition[index] = {
+        ...newMaterialComposition[index],
+        material: materialName,
+      };
+      return { ...prevData, material_composition: newMaterialComposition };
+    });
+
+    setMaterialOptions((prevOptions) => mergeUniqueStrings([...prevOptions, materialName]));
+  };
+
   const handleToggleFavorite = async (garmentId: number, currentFavoriteStatus: boolean) => {
     if (!formData) return;
 
@@ -287,8 +380,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
     if (result.message?.includes('successfully')) {
       toast.success(result.message);
       // Re-fetch data to reflect the change
-      const wardrobeRes = await fetch('/api/wardrobe');
-      const wardrobeJson = await wardrobeRes.json();
+      const wardrobeJson = await fetchFreshWardrobe();
       setWardrobeData(wardrobeJson);
     } else {
       toast.error(result.message || 'Failed to update favorite status.');
@@ -301,8 +393,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
       if (result.message?.includes('successfully')) {
         toast.success(result.message);
         // Re-fetch data and adjust index
-        const wardrobeRes = await fetch('/api/wardrobe');
-        const wardrobeJson = await wardrobeRes.json();
+        const wardrobeJson = await fetchFreshWardrobe();
         setWardrobeData(wardrobeJson);
         setCurrentIndex(0); // Reset to first garment after deletion
       } else {
@@ -315,7 +406,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
     const errors: Record<string, string> = {};
     if (!schemaData) return errors;
 
-    const requiredFields = schemaData.items.required;
+    const requiredFields = schemaData.items.required.filter((field) => field !== 'id');
 
     requiredFields.forEach(key => {
       const value = (data as any)[key];
@@ -334,6 +425,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
 
   const currentGarment = formData;
   const schemaProperties = schemaData?.items.properties;
+  const hasExistingGarments = wardrobeData.length > 0;
 
   const renderInputField = (key: string, prop: SchemaProperty, value: any) => {
     const isRequired = schemaData?.items.required.includes(key);
@@ -388,8 +480,25 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
               {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
             </>
           );
-        }
-        else if (prop.enum) {
+        } else if (key === 'type') {
+          return (
+            <>
+              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
+              <CreatableCombobox
+                options={mergeUniqueStrings([...typeOptions, value])}
+                value={value}
+                onChange={(nextType) => {
+                  handleSelectChange(key, nextType);
+                  setTypeOptions((prevOptions) => mergeUniqueStrings([...prevOptions, nextType]));
+                }}
+                placeholder={placeholderText}
+                searchPlaceholder="Search or create garment type..."
+                className={hasError ? 'border-red-500' : ''}
+              />
+              {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
+            </>
+          );
+        } else if (prop.enum) {
           return (
             <>
               <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
@@ -445,13 +554,13 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
             <div>
               <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
               {(value as MaterialComposition[]).map((mc, index) => (
-                <div key={index} className="flex space-x-2 mb-2">
-                  <Input
-                    type="text"
-                    name={`material_composition[${index}].material`}
+                <div key={index} className="mb-2 grid grid-cols-[minmax(0,1fr)_120px_auto] items-center gap-2">
+                  <CreatableCombobox
+                    options={mergeUniqueStrings([...materialOptions, mc.material])}
                     value={mc.material}
-                    onChange={handleChange}
-                    placeholder="e.g., Cotton"
+                    onChange={(nextMaterial) => handleMaterialNameChange(index, nextMaterial)}
+                    placeholder="Select or create material..."
+                    searchPlaceholder="Search or create material..."
                     className={hasError ? 'border-red-500' : ''}
                   />
                   <Input
@@ -459,7 +568,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                     name={`material_composition[${index}].percentage`}
                     value={isNaN(mc.percentage) ? '' : mc.percentage}
                     onChange={handleChange}
-                    placeholder="e.g., 70 (0-100)"
+                    placeholder="%"
                     min="0"
                     max="100"
                     className={hasError ? 'border-red-500' : ''}
@@ -479,6 +588,24 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
               </Button>
               {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
             </div>
+          );
+        } else if (key === 'color_palette') {
+          return (
+            <>
+              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
+              <CreatableMultiSelect
+                options={mergeUniqueStrings([...colorOptions, ...(value as string[])])}
+                selected={value as string[]}
+                onChange={(selectedValues) => {
+                  handleMultiSelectChange(key, selectedValues);
+                  setColorOptions((prevOptions) => mergeUniqueStrings([...prevOptions, ...selectedValues]));
+                }}
+                placeholder={placeholderText}
+                searchPlaceholder="Search or create colors..."
+                className={hasError ? 'border-red-500' : ''}
+              />
+              {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
+            </>
           );
         } else if (prop.items?.enum) {
           return (
@@ -536,7 +663,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
 
       
 
-      {!isNewGarmentMode && (
+      {!isNewGarmentMode && hasExistingGarments && (
         <div className="flex items-center justify-between w-full max-w-5xl mb-4">
           <Button onClick={handlePrev} variant="outline">
             Previous
@@ -550,7 +677,20 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
         </div>
       )}
 
-      
+      {!isNewGarmentMode && !hasExistingGarments && (
+        <Card className="w-full max-w-5xl">
+          <CardHeader>
+            <CardTitle className="text-center text-2xl">No garments available</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col items-center gap-3">
+            <p className="text-sm text-gray-600">Create your first garment to start editing.</p>
+            <Button asChild>
+              <Link href="/add-garment">Add Garment</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
 
       {currentGarment && schemaProperties && (
         <Card className="w-full max-w-5xl relative">
@@ -594,25 +734,39 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                 className="md:w-1/2 p-4"
                 onSubmit={async (event) => {
                   event.preventDefault();
+                  if (!currentGarment) return;
+
+                  const errors = validateForm(currentGarment);
+                  setValidationErrors(errors);
+                  if (Object.keys(errors).length > 0) {
+                    toast.error('Please fix the highlighted fields before saving.');
+                    return;
+                  }
+
                   const form = event.target as HTMLFormElement;
                   const formDataForAction = new FormData(form);
 
-                  const file = inputFileRef.current?.files?.[0];
+                  try {
+                    setIsUploading(true);
+                    const file = inputFileRef.current?.files?.[0];
 
-                  if (file) {
-                    const newBlob = await upload(file.name, file, {
-                      access: 'public',
-                      handleUploadUrl: '/api/upload',
-                    });
-                    formDataForAction.set('file_name', newBlob.url);
-                  } else if (!isNewGarmentMode) {
-                    formDataForAction.set('file_name', currentGarment?.file_name || '');
-                  }
+                    if (file) {
+                      const newBlob = await upload(file.name, file, {
+                        access: 'public',
+                        handleUploadUrl: '/api/upload',
+                      });
+                      formDataForAction.set('file_name', newBlob.url);
+                    } else if (!isNewGarmentMode) {
+                      formDataForAction.set('file_name', currentGarment?.file_name || '');
+                    }
 
-                  if (isNewGarmentMode) {
-                    startTransition(() => createFormAction(formDataForAction));
-                  } else {
-                    startTransition(() => updateFormAction(formDataForAction));
+                    if (isNewGarmentMode) {
+                      startTransition(() => createFormAction(formDataForAction));
+                    } else {
+                      startTransition(() => updateFormAction(formDataForAction));
+                    }
+                  } finally {
+                    setIsUploading(false);
                   }
                 }}
               >
@@ -624,18 +778,20 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                 {/* Hidden input for favorite status */}
                 <input type="hidden" name="favorite" value={String(currentGarment.favorite)} />
 
+                {/* Hidden input for custom combobox fields */}
+                <input type="hidden" name="type" value={currentGarment.type || ''} />
+
                 {/* Hidden inputs for multi-select fields */}
-                <input type="hidden" name="colors" value={currentGarment.color_palette.join(',')} />
-                <input type="hidden" name="suitableWeathers" value={currentGarment.suitable_weather.join(',')} />
-                <input type="hidden" name="suitableTimesOfDay" value={currentGarment.suitable_time_of_day.join(',')} />
-                <input type="hidden" name="suitablePlaces" value={currentGarment.suitable_places.join(',')} />
-                <input type="hidden" name="suitableOccasions" value={currentGarment.suitable_occasions.join(',')} />
+                <input type="hidden" name="colors" value={JSON.stringify(currentGarment.color_palette)} />
+                <input type="hidden" name="suitableWeathers" value={JSON.stringify(currentGarment.suitable_weather)} />
+                <input type="hidden" name="suitableTimesOfDay" value={JSON.stringify(currentGarment.suitable_time_of_day)} />
+                <input type="hidden" name="suitablePlaces" value={JSON.stringify(currentGarment.suitable_places)} />
+                <input type="hidden" name="suitableOccasions" value={JSON.stringify(currentGarment.suitable_occasions)} />
                 <input type="hidden" name="materials" value={JSON.stringify(currentGarment.material_composition.map(m => ({ material: m.material, percentage: m.percentage })))} />
 
                 {/* Hidden inputs for single-select fields */}
                 <input type="hidden" name="style" value={currentGarment.style || ''} />
                 <input type="hidden" name="formality" value={currentGarment.formality || ''} />
-                <input type="hidden" name="warmthLevel" value={currentGarment.warmth_level || ''} />
 
                 <Accordion type="multiple" className="w-full">
                   <AccordionItem value="item-1">
@@ -689,9 +845,6 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                     <AccordionTrigger>Suitability</AccordionTrigger>
                     <AccordionContent>
                       <div className="mb-4 w-full">
-                        {renderInputField('warmth_level', schemaProperties.warmth_level, currentGarment.warmth_level)}
-                      </div>
-                      <div className="mb-4 w-full">
                         {renderInputField('suitable_weather', schemaProperties.suitable_weather, currentGarment.suitable_weather)}
                       </div>
                       <div className="mb-4 w-full">
@@ -707,7 +860,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                   </AccordionItem>
                 </Accordion>
                 <div className="flex flex-col mt-4 space-y-2">
-                  <SubmitButton />
+                  <SubmitButton pending={isPending || isUploading} />
                   <Button asChild variant="outline" className="w-full">
                     <Link href="/viewer">Cancel</Link>
                   </Button>

@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { Card, CardContent } from './ui/card';
@@ -20,7 +21,6 @@ interface Garment {
   formality: string;
   material_composition: any[]; // Simplified for viewer
   color_palette: string[];
-  warmth_level: string;
   suitable_weather: string[];
   suitable_time_of_day: string[];
   suitable_places: string[];
@@ -53,7 +53,33 @@ interface AvailableFilters {
 interface WardrobeViewerClientProps {
   initialWardrobeData: Garment[];
   initialAvailableFilters: AvailableFilters;
+  initialSelectedFilters: Filters;
+  initialShowOnlyFavorites: boolean;
 }
+
+const emptyFilters = (): Filters => ({
+  brand: [],
+  type: [],
+  color_palette: [],
+  style: [],
+  material: [],
+});
+
+const dedupeValues = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+
+  for (const rawValue of values) {
+    const value = String(rawValue ?? '').trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    deduped.push(value);
+  }
+
+  return deduped;
+};
+
+const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const emojiMap: { [key: string]: string } = {
   "Sweatshirt": "👕",
@@ -100,69 +126,111 @@ const AddNewGarmentCard = () => (
   </Link>
 );
 
-export default function WardrobeViewerClient({ initialWardrobeData, initialAvailableFilters }: WardrobeViewerClientProps) {
-  const [wardrobeData, setWardrobeData] = useState<Garment[]>(initialWardrobeData);
+export default function WardrobeViewerClient({
+  initialWardrobeData,
+  initialAvailableFilters,
+  initialSelectedFilters,
+  initialShowOnlyFavorites,
+}: WardrobeViewerClientProps) {
+  const wardrobeData = initialWardrobeData;
+  const availableFilters = initialAvailableFilters;
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
-  const [mounted, setMounted] = useState(false);
+  const [selectedFilters, setSelectedFilters] = useState<Filters>(initialSelectedFilters);
+  const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(initialShowOnlyFavorites);
+  const selectedFiltersRef = useRef<Filters>(initialSelectedFilters);
+  const showOnlyFavoritesRef = useRef<boolean>(initialShowOnlyFavorites);
 
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const getFiltersFromUrl = useCallback(() => {
+    const parseFilterValues = (key: keyof Filters): string[] => {
+      const values = searchParams.getAll(key);
+      if (values.length === 0) return [];
+      if (values.length > 1) return dedupeValues(values);
+
+      const singleValue = values[0].trim();
+      if (!singleValue.includes(',')) {
+        return singleValue ? [singleValue] : [];
+      }
+
+      // Backward compatibility with old comma-joined query format.
+      if (typeof window !== 'undefined') {
+        const encodedKey = encodeURIComponent(key);
+        const rawQuery = window.location.search;
+        const legacyPattern = new RegExp(`(?:\\?|&)${escapeRegex(encodedKey)}=[^&]*,[^&]*(?:&|$)`);
+        const encodedCommaPattern = new RegExp(`(?:\\?|&)${escapeRegex(encodedKey)}=[^&]*%2C[^&]*(?:&|$)`, 'i');
+
+        if (legacyPattern.test(rawQuery) && !encodedCommaPattern.test(rawQuery)) {
+          return dedupeValues(singleValue.split(','));
+        }
+      }
+
+      return singleValue ? [singleValue] : [];
+    };
+
     const filters: Filters = {
-      brand: searchParams.get('brand')?.split(',').filter(Boolean) || [],
-      type: searchParams.get('type')?.split(',').filter(Boolean) || [],
-      color_palette: searchParams.get('color_palette')?.split(',').filter(Boolean) || [],
-      style: searchParams.get('style')?.split(',').filter(Boolean) || [],
-      material: searchParams.get('material')?.split(',').filter(Boolean) || [],
+      brand: parseFilterValues('brand'),
+      type: parseFilterValues('type'),
+      color_palette: parseFilterValues('color_palette'),
+      style: parseFilterValues('style'),
+      material: parseFilterValues('material'),
     };
     const favorites = searchParams.get('favorites') === 'true';
     return { filters, favorites };
   }, [searchParams]);
 
-  const [selectedFilters, setSelectedFilters] = useState<Filters>(mounted ? getFiltersFromUrl().filters : { brand: [], type: [], color_palette: [], style: [], material: [] });
-  const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(mounted ? getFiltersFromUrl().favorites : false);
-  const [availableFilters, setAvailableFilters] = useState<AvailableFilters>(initialAvailableFilters);
+  useEffect(() => {
+    selectedFiltersRef.current = selectedFilters;
+  }, [selectedFilters]);
 
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    showOnlyFavoritesRef.current = showOnlyFavorites;
+  }, [showOnlyFavorites]);
 
   useEffect(() => {
-    if (mounted) {
-      const { filters, favorites } = getFiltersFromUrl();
-      setSelectedFilters(filters);
-      setShowOnlyFavorites(favorites);
-    }
-  }, [searchParams, getFiltersFromUrl, mounted]);
+    const { filters, favorites } = getFiltersFromUrl();
+    selectedFiltersRef.current = filters;
+    showOnlyFavoritesRef.current = favorites;
+    setSelectedFilters(filters);
+    setShowOnlyFavorites(favorites);
+  }, [searchParams, getFiltersFromUrl]);
 
   const toggleFilterDrawer = () => {
     setIsFilterDrawerOpen(!isFilterDrawerOpen);
   };
 
-  const updateUrl = (newFilters: Filters, newFavorites: boolean) => {
+  const updateUrl = useCallback((newFilters: Filters, newFavorites: boolean) => {
     const newSearchParams = new URLSearchParams();
-    Object.entries(newFilters).forEach(([key, value]) => {
-      if (value.length > 0) {
-        newSearchParams.set(key, value.join(','));
-      }
+    (Object.entries(newFilters) as Array<[keyof Filters, string[]]>).forEach(([key, values]) => {
+      values.forEach((value) => newSearchParams.append(key, value));
     });
     if (newFavorites) {
       newSearchParams.set('favorites', 'true');
     }
-    router.push(`?${newSearchParams.toString()}`);
-  };
+    const query = newSearchParams.toString();
+    router.push(query ? `${pathname}?${query}` : pathname);
+  }, [pathname, router]);
 
   const toggleShowOnlyFavorites = () => {
-    updateUrl(selectedFilters, !showOnlyFavorites);
+    const nextFavorites = !showOnlyFavoritesRef.current;
+    showOnlyFavoritesRef.current = nextFavorites;
+    setShowOnlyFavorites(nextFavorites);
+    updateUrl(selectedFiltersRef.current, nextFavorites);
   };
 
   const handleClearFilters = () => {
-    updateUrl({ brand: [], type: [], color_palette: [], style: [], material: [] }, false);
+    const resetFilters = emptyFilters();
+    selectedFiltersRef.current = resetFilters;
+    showOnlyFavoritesRef.current = false;
+    setSelectedFilters(resetFilters);
+    setShowOnlyFavorites(false);
+    updateUrl(resetFilters, false);
   };
 
   const handleFilterChange = (category: keyof Filters, value: string) => {
-    const currentCategoryFilters = selectedFilters[category];
+    const currentCategoryFilters = selectedFiltersRef.current[category];
     let newCategoryFilters: string[];
 
     if (currentCategoryFilters.includes(value)) {
@@ -172,10 +240,12 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
     }
 
     const newFilters = {
-      ...selectedFilters,
+      ...selectedFiltersRef.current,
       [category]: newCategoryFilters,
     };
-    updateUrl(newFilters, showOnlyFavorites);
+    selectedFiltersRef.current = newFilters;
+    setSelectedFilters(newFilters);
+    updateUrl(newFilters, showOnlyFavoritesRef.current);
   };
 
   const filteredWardrobe = useMemo(() => {
@@ -200,8 +270,9 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
   }, [wardrobeData, selectedFilters, showOnlyFavorites]);
 
   const isAnyFilterSelected = useMemo(() => {
-    return Object.values(selectedFilters).some(filterArray => filterArray.length > 0);
-  }, [selectedFilters]);
+    const hasCategoryFilters = Object.values(selectedFilters).some(filterArray => filterArray.length > 0);
+    return hasCategoryFilters || showOnlyFavorites;
+  }, [selectedFilters, showOnlyFavorites]);
 
   return (
     <div className="min-h-screen bg-gray-100 flex">
@@ -270,7 +341,7 @@ export default function WardrobeViewerClient({ initialWardrobeData, initialAvail
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-6 w-full max-w-6xl">
           <AddNewGarmentCard />
           {filteredWardrobe.map((garment) => (
-            <Card key={garment.file_name} className="flex flex-col items-center text-center relative">
+            <Card key={garment.id} className="flex flex-col items-center text-center relative">
               {garment.favorite && (
                 <FiHeart fill="red" className="absolute top-4 right-4 text-red-500" />
               )}

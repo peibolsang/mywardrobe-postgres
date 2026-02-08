@@ -11,16 +11,15 @@ async function getGarment(id: string): Promise<Garment | null> {
       g.file_name,
       g.model,
       g.brand,
-      g.type,
+      t.name AS type,
       g.features,
       g.favorite,
       s.name AS style,
-      f.name AS formality,
-      wl.name AS warmth_level
+      f.name AS formality
     FROM garments g
+    LEFT JOIN types t ON g.type_id = t.id
     LEFT JOIN styles s ON g.style_id = s.id
     LEFT JOIN formalities f ON g.formality_id = f.id
-    LEFT JOIN warmth_levels wl ON g.warmth_level_id = wl.id
     WHERE g.id = ${id}
   `;
 

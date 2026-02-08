@@ -55,11 +55,6 @@
         },
         "description": "An array of dominant colors or color patterns in the garment (e.g., ['blue', 'white'], ['black'], ['floral print'])."
       },
-      "warmth_level": {
-        "type": "string",
-        "description": "The warmth provided by the garment (e.g., 'very light', 'light', 'medium', 'warm', 'very warm').",
-        "enum": ["very light", "light", "medium", "warm", "very warm"]
-      },
       "suitable_weather": {
         "type": "array",
         "items": {
@@ -115,7 +110,6 @@
       "formality",
       "material_composition",
       "color_palette",
-      "warmth_level",
       "suitable_weather",
       "suitable_time_of_day",
       "suitable_places",

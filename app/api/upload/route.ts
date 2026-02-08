@@ -1,7 +1,12 @@
 import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
 import { NextResponse } from 'next/server';
+import { isOwnerSession } from '@/lib/owner';
  
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!(await isOwnerSession())) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
   const body = (await request.json()) as HandleUploadBody;
  
   try {
