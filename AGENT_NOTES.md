@@ -40,3 +40,4 @@
 - Ops reliability note: Weather tool providers are environment-dependent; if one API host is blocked/unresolvable, switch tool execution to a reachable provider (OpenWeather in this case) while preserving the same model-invoked tool contract.
 - Security hardening note: OpenAI-backed endpoints should enforce defense-in-depth beyond auth: same-origin request validation, endpoint rate limiting, and no logging of raw user prompts/interpreted private context.
 - Form validation bugfix note: In create flows with deferred upload, validating `file_name` string alone is incorrect; required-image validation must also accept a selected file in the file input before upload happens.
+- Lookup integrity note: For controlled single-select lookups (`style`, `formality`), never silently fallback to null on unresolved values. Resolve case-insensitively and fail fast with explicit validation errors to prevent accidental data loss during create/update.

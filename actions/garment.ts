@@ -22,6 +22,7 @@ const UNAUTHORIZED_RESULT = { message: 'Forbidden', status: 'error' } as const;
 type MaterialInput = { material: string; percentage: number };
 type MaterialToInsert = { id: number; percentage: number };
 type TypeLookupResult = { id: number } | null;
+type LookupIdResult = { id: number } | null;
 
 function normalizeLookupValues(values: string[]): string[] {
   const seen = new Set<string>();
@@ -178,6 +179,36 @@ async function resolveTypeId(sql: any, typeName: string): Promise<TypeLookupResu
   return { id: insertedOrExistingType[0].id };
 }
 
+async function resolveStyleId(sql: any, styleName: string): Promise<LookupIdResult> {
+  const normalizedStyleName = String(styleName ?? '').trim();
+  if (!normalizedStyleName) return null;
+
+  const existingStyle = await sql`
+    SELECT id
+    FROM styles
+    WHERE LOWER(name) = LOWER(${normalizedStyleName})
+    LIMIT 1
+  ` as any[];
+
+  if (existingStyle.length === 0) return null;
+  return { id: existingStyle[0].id };
+}
+
+async function resolveFormalityId(sql: any, formalityName: string): Promise<LookupIdResult> {
+  const normalizedFormalityName = String(formalityName ?? '').trim();
+  if (!normalizedFormalityName) return null;
+
+  const existingFormality = await sql`
+    SELECT id
+    FROM formalities
+    WHERE LOWER(name) = LOWER(${normalizedFormalityName})
+    LIMIT 1
+  ` as any[];
+
+  if (existingFormality.length === 0) return null;
+  return { id: existingFormality[0].id };
+}
+
 // ─────────────────────────────────────────────────────────────
 // Create
 // ─────────────────────────────────────────────────────────────
@@ -199,8 +230,8 @@ export async function createGarment(prevState: any, formData: FormData): Promise
     const favorite = formData.get('favorite') === 'true';
 
     // Single-select lookup fields
-    const styleName = formData.get('style') as string;
-    const formalityName = formData.get('formality') as string;
+    const styleName = String(formData.get('style') ?? '').trim();
+    const formalityName = String(formData.get('formality') ?? '').trim();
 
     // Multi-select lookup fields (JSON arrays, fallback to legacy comma-separated values)
     const colorNames = parseStringArrayField(formData.get('colors'));
@@ -215,23 +246,29 @@ export async function createGarment(prevState: any, formData: FormData): Promise
 
     // 2. Fetch IDs for all lookup values in parallel
     const [
-      styleResult,
-      formalityResult,
+      resolvedStyle,
+      resolvedFormality,
       suitableWeathersResult,
       suitableTimesOfDayResult,
       suitablePlacesResult,
       suitableOccasionsResult
     ] = await Promise.all([
-      sql`SELECT id FROM styles WHERE name = ${styleName}`,
-      sql`SELECT id FROM formalities WHERE name = ${formalityName}`,
+      resolveStyleId(sql, styleName),
+      resolveFormalityId(sql, formalityName),
       suitableWeatherNames.length > 0 ? sql`SELECT id FROM suitable_weathers WHERE name = ANY(${suitableWeatherNames})` : Promise.resolve([]),
       suitableTimeOfDayNames.length > 0 ? sql`SELECT id FROM suitable_times_of_day WHERE name = ANY(${suitableTimeOfDayNames})` : Promise.resolve([]),
       suitablePlaceNames.length > 0 ? sql`SELECT id FROM suitable_places WHERE name = ANY(${suitablePlaceNames})` : Promise.resolve([]),
       suitableOccasionNames.length > 0 ? sql`SELECT id FROM suitable_occasions WHERE name = ANY(${suitableOccasionNames})` : Promise.resolve([])
     ]);
 
-    const styleId = styleResult[0]?.id;
-    const formalityId = formalityResult[0]?.id;
+    const styleId = resolvedStyle?.id;
+    const formalityId = resolvedFormality?.id;
+    if (!styleId) {
+      return { message: 'Style is required and must match an existing style option.', status: 'error' };
+    }
+    if (!formalityId) {
+      return { message: 'Formality is required and must match an existing formality option.', status: 'error' };
+    }
 
     const colorIds = await resolveColorIds(sql, colorNames);
     const suitableWeatherIds = suitableWeathersResult.map((row: any) => row.id);
@@ -346,8 +383,8 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
 
     // Get names for single-select lookup fields
     // Get names for single-select lookup fields
-    const styleName = formData.get('style') as string;
-    const formalityName = formData.get('formality') as string;
+    const styleName = String(formData.get('style') ?? '').trim();
+    const formalityName = String(formData.get('formality') ?? '').trim();
 
     // Get names for multi-select lookup fields (assuming comma-separated names)
     // For multi-selects, if formData is empty, we should retain existing associations.
@@ -432,23 +469,30 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
 
     // Fetch IDs for lookup tables
     const [
-      styleResult,
-      formalityResult,
+      resolvedStyle,
+      resolvedFormality,
       suitableWeathersResult,
       suitableTimesOfDayResult,
       suitablePlacesResult,
       suitableOccasionsResult,
     ] = await Promise.all([
-      sql`SELECT id FROM styles WHERE name = ${styleName}`,
-      sql`SELECT id FROM formalities WHERE name = ${formalityName}`,
+      styleName ? resolveStyleId(sql, styleName) : Promise.resolve(null),
+      formalityName ? resolveFormalityId(sql, formalityName) : Promise.resolve(null),
       suitableWeatherNames.length > 0 ? sql`SELECT id FROM suitable_weathers WHERE name = ANY(${suitableWeatherNames})` : Promise.resolve([]),
       suitableTimeOfDayNames.length > 0 ? sql`SELECT id FROM suitable_times_of_day WHERE name = ANY(${suitableTimeOfDayNames})` : Promise.resolve([]),
       suitablePlaceNames.length > 0 ? sql`SELECT id FROM suitable_places WHERE name = ANY(${suitablePlaceNames})` : Promise.resolve([]),
       suitableOccasionNames.length > 0 ? sql`SELECT id FROM suitable_occasions WHERE name = ANY(${suitableOccasionNames})` : Promise.resolve([]),
     ]);
 
-    const styleId = styleResult[0]?.id || existingGarment.style_id;
-    const formalityId = formalityResult[0]?.id || existingGarment.formality_id;
+    if (styleName && !resolvedStyle) {
+      return { message: 'Style value is invalid. Please re-select style.', status: 'error' };
+    }
+    if (formalityName && !resolvedFormality) {
+      return { message: 'Formality value is invalid. Please re-select formality.', status: 'error' };
+    }
+
+    const styleId = resolvedStyle?.id || existingGarment.style_id;
+    const formalityId = resolvedFormality?.id || existingGarment.formality_id;
 
     const colorIds = await resolveColorIds(sql, colorNames);
     const suitableWeatherIds = suitableWeathersResult.map((row: any) => row.id);
