@@ -64,6 +64,15 @@ type WeatherContextStatus =
   | "fetched"
   | "failed";
 
+type RateLimitState = {
+  count: number;
+  windowStart: number;
+};
+
+const AI_LOOK_WINDOW_MS = 60 * 1000;
+const AI_LOOK_MAX_REQUESTS_PER_WINDOW = 8;
+const aiLookRateLimit = new Map<string, RateLimitState>();
+
 const SCHEMA_ITEMS = (schema?.items ?? {}) as SchemaItems;
 
 const WEATHER_OPTIONS = SCHEMA_ITEMS.properties?.suitable_weather?.items?.enum ?? [];
@@ -332,8 +341,53 @@ const computeObjectiveMatchScore = (lineup: Garment[], intent: CanonicalIntent):
   return Math.round(average);
 };
 
+const getClientIp = (request: Request): string =>
+  normalize(
+    request.headers.get("x-forwarded-for")?.split(",")[0] ||
+      request.headers.get("x-real-ip") ||
+      "unknown"
+  );
+
+const isRateLimited = (key: string): boolean => {
+  const now = Date.now();
+  const existing = aiLookRateLimit.get(key);
+
+  if (!existing) {
+    aiLookRateLimit.set(key, { count: 1, windowStart: now });
+    return false;
+  }
+
+  if (now - existing.windowStart > AI_LOOK_WINDOW_MS) {
+    aiLookRateLimit.set(key, { count: 1, windowStart: now });
+    return false;
+  }
+
+  if (existing.count >= AI_LOOK_MAX_REQUESTS_PER_WINDOW) {
+    return true;
+  }
+
+  aiLookRateLimit.set(key, {
+    count: existing.count + 1,
+    windowStart: existing.windowStart,
+  });
+  return false;
+};
+
+const isAllowedOrigin = (request: Request): boolean => {
+  const origin = request.headers.get("origin");
+  const requestOrigin = new URL(request.url).origin;
+
+  // Non-browser/server-to-server requests may omit Origin.
+  if (!origin) return true;
+  return origin === requestOrigin;
+};
+
 export async function POST(request: Request) {
   try {
+    if (!isAllowedOrigin(request)) {
+      return NextResponse.json({ error: "Invalid request origin." }, { status: 403 });
+    }
+
     if (!(await isOwnerSession())) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
@@ -342,6 +396,14 @@ export async function POST(request: Request) {
     const parsedBody = requestSchema.safeParse(rawBody);
     if (!parsedBody.success) {
       return NextResponse.json({ error: "Invalid prompt payload." }, { status: 400 });
+    }
+
+    const rateLimitKey = `owner:${getClientIp(request)}`;
+    if (isRateLimited(rateLimitKey)) {
+      return NextResponse.json(
+        { error: "Too many AI look requests. Please wait and try again." },
+        { status: 429 }
+      );
     }
 
     const userPrompt = parsedBody.data.prompt;
@@ -482,13 +544,6 @@ export async function POST(request: Request) {
       style: toCanonicalValues(interpreted.style, STYLE_OPTIONS),
       notes: normalize(interpreted.notes),
     };
-
-    console.log("[ai-look][interpreted-intent]", {
-      userPrompt,
-      interpreted,
-      canonicalIntent,
-      weatherContextSummary,
-    });
 
     const { object } = await generateObject({
       model: openai("gpt-4.1-mini"),

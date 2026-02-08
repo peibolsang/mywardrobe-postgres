@@ -95,6 +95,7 @@ Use imperative commit subjects.
   - short cooldown between repeated requests per identifier
   - max request count per rolling time window
 - `AUTH_EMAIL_FROM` can be used to configure sender address; fallback is `onboarding@resend.dev`.
+- AI recommendation API hardening (`/api/ai-look`) includes same-origin POST validation and in-memory per-window request throttling to reduce abuse risk and OpenAI cost exposure.
 
 ## Caching strategy: 
 - Shared wardrobe reads are centralized in `lib/wardrobe.ts` via `getWardrobeData()`.

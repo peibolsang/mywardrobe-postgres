@@ -38,3 +38,4 @@
 - AI tool-use note: For prompts with geographic place mentions, add an external weather-enrichment step (location extraction + geocode + weather API) and inject a concise weather summary into both intent parsing and recommendation prompts.
 - Agent integration note: Prefer true model-invoked tool calling (`generateText` + `tool`) over pre-processing heuristics when users explicitly request tool semantics and dynamic tool invocation.
 - Ops reliability note: Weather tool providers are environment-dependent; if one API host is blocked/unresolvable, switch tool execution to a reachable provider (OpenWeather in this case) while preserving the same model-invoked tool contract.
+- Security hardening note: OpenAI-backed endpoints should enforce defense-in-depth beyond auth: same-origin request validation, endpoint rate limiting, and no logging of raw user prompts/interpreted private context.
