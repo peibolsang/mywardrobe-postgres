@@ -20,27 +20,7 @@ import { CreatableMultiSelect } from '../components/ui/creatable-multi-select';
 import { cn } from '../lib/utils';
 import { createGarment, updateGarment, deleteGarment } from '@/actions/garment'; // Import Server Actions
 import { useActionState } from 'react'; // Import new React 19 hooks
-import { SubmitButton } from './client/submit-button';
-import { GarmentFormData, MaterialComposition } from '@/lib/types'; // Import GarmentFormData and MaterialComposition
-
-// Updated Garment interface to match the normalized schema output
-interface Garment {
-  id: number;
-  file_name: string;
-  model: string;
-  brand: string;
-  type: string;
-  style: string; // Now a string name from lookup
-  formality: string; // Now a string name from lookup
-  material_composition: { material: string; percentage: number }[];
-  color_palette: string[];
-  suitable_weather: string[];
-  suitable_time_of_day: string[];
-  suitable_places: string[];
-  suitable_occasions: string[];
-  features: string;
-  favorite: boolean;
-}
+import { Garment, GarmentFormData, MaterialComposition } from '@/lib/types'; // Import GarmentFormData and MaterialComposition
 
 interface SchemaProperty {
   type: string;
@@ -62,6 +42,10 @@ interface Schema {
 // Removed initialWardrobeData and initialSchemaData from props
 interface EditorFormProps {
   isNewGarmentMode?: boolean; // Optional prop to indicate new garment mode
+  initialGarmentId?: number | null;
+  initialWardrobeData?: Garment[];
+  initialSchemaData?: Schema;
+  initialEditorOptions?: EditorOptionsResponse;
 }
 
 interface EditorOptionsResponse {
@@ -89,12 +73,24 @@ const mergeUniqueStrings = (values: string[]): string[] => {
   return merged.sort((a, b) => a.localeCompare(b));
 };
 
-export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = false }: EditorFormProps) {
-  const [wardrobeData, setWardrobeData] = useState<Garment[]>([]); // Initialize as empty
-  const [schemaData, setSchemaData] = useState<Schema | null>(null); // Initialize as null
-  const [typeOptions, setTypeOptions] = useState<string[]>([]);
-  const [materialOptions, setMaterialOptions] = useState<string[]>([]);
-  const [colorOptions, setColorOptions] = useState<string[]>([]);
+export default function EditorForm({
+  isNewGarmentMode: isNewGarmentModeProp = false,
+  initialGarmentId = null,
+  initialWardrobeData,
+  initialSchemaData,
+  initialEditorOptions,
+}: EditorFormProps) {
+  const [wardrobeData, setWardrobeData] = useState<Garment[]>(initialWardrobeData ?? []);
+  const [schemaData, setSchemaData] = useState<Schema | null>(initialSchemaData ?? null);
+  const [typeOptions, setTypeOptions] = useState<string[]>(
+    mergeUniqueStrings(initialEditorOptions?.types ?? [])
+  );
+  const [materialOptions, setMaterialOptions] = useState<string[]>(
+    mergeUniqueStrings(initialEditorOptions?.materials ?? [])
+  );
+  const [colorOptions, setColorOptions] = useState<string[]>(
+    mergeUniqueStrings(initialEditorOptions?.colors ?? [])
+  );
   const [currentIndex, setCurrentIndex] = useState(0);
   const [formData, setFormData] = useState<GarmentFormData | null>(null); // Use GarmentFormData for form state
   const inputFileRef = useRef<HTMLInputElement>(null);
@@ -103,9 +99,14 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
   
   const isNewGarmentMode = isNewGarmentModeProp;
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const hasServerHydration =
+    initialWardrobeData !== undefined &&
+    initialSchemaData !== undefined &&
+    initialEditorOptions !== undefined;
 
   const [isPending, startTransition] = useTransition();
   const [isUploading, setIsUploading] = useState(false);
+  const hasAppliedInitialSelection = useRef(false);
 
   // useActionState for form submission feedback
   const [createState, createFormAction] = useActionState(createGarment, { message: '', status: '' });
@@ -153,6 +154,8 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
 
   // Fetch initial data
   useEffect(() => {
+    if (hasServerHydration) return;
+
     const fetchData = async () => {
       try {
         const wardrobeJson = await fetchFreshWardrobe();
@@ -184,7 +187,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
       }
     };
     fetchData();
-  }, [fetchEditorOptions, fetchFreshWardrobe]); // Run once on mount
+  }, [fetchEditorOptions, fetchFreshWardrobe, hasServerHydration]); // Run once on mount
 
   
 
@@ -220,6 +223,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
 
       setFormData({
         ...currentGarment,
+        favorite: Boolean(currentGarment.favorite),
         material_composition: filteredMaterialComposition,
         // Ensure other array fields are arrays
         color_palette: Array.isArray(currentGarment.color_palette) ? currentGarment.color_palette : [],
@@ -245,17 +249,17 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
     setColorOptions((prevOptions) => mergeUniqueStrings([...prevOptions, ...wardrobeColorOptions]));
   }, [wardrobeData]);
 
-  const handleNext = () => {
-    if (wardrobeData.length <= 1) return;
-    setCurrentIndex((prevIndex) => (prevIndex + 1) % wardrobeData.length);
-  };
+  useEffect(() => {
+    if (isNewGarmentMode || !initialGarmentId || wardrobeData.length === 0 || hasAppliedInitialSelection.current) {
+      return;
+    }
 
-  const handlePrev = () => {
-    if (wardrobeData.length <= 1) return;
-    setCurrentIndex((prevIndex) =>
-      prevIndex === 0 ? wardrobeData.length - 1 : prevIndex - 1
-    );
-  };
+    const selectedIndex = wardrobeData.findIndex((garment) => garment.id === initialGarmentId);
+    if (selectedIndex >= 0) {
+      setCurrentIndex(selectedIndex);
+    }
+    hasAppliedInitialSelection.current = true;
+  }, [initialGarmentId, isNewGarmentMode, wardrobeData]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -426,7 +430,6 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
   const currentGarment = formData;
   const schemaProperties = schemaData?.items.properties;
   const hasExistingGarments = wardrobeData.length > 0;
-  const primaryColor = currentGarment?.color_palette?.[0] || 'Color N/A';
   const getDisplayFileName = (rawFileName: string | null | undefined) => {
     const source = (fileName ?? rawFileName ?? '').trim();
     if (!source) return 'No file chosen';
@@ -691,23 +694,10 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
       <Toaster />
 
       <div className="mx-auto mb-4 w-full max-w-[1700px]">
-        <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="mb-3 flex items-center gap-3">
           <Link href="/viewer" className="text-sm font-medium text-slate-700 hover:text-slate-900 hover:underline">
             &larr; Back to Wardrobe
           </Link>
-          {!isNewGarmentMode && hasExistingGarments && (
-            <div className="grid w-[220px] grid-cols-[1fr_auto_1fr] items-center">
-              <Button onClick={handlePrev} variant="outline" size="sm" className="justify-self-start">
-                Previous
-              </Button>
-              <span className="min-w-14 text-center text-sm text-slate-600">
-                {currentIndex + 1} / {wardrobeData.length}
-              </span>
-              <Button onClick={handleNext} variant="outline" size="sm" className="justify-self-end">
-                Next
-              </Button>
-            </div>
-          )}
         </div>
       </div>
 
@@ -727,50 +717,39 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
 
 
       {currentGarment && schemaProperties && (
-        <div className="mx-auto grid w-full max-w-[1700px] gap-6 lg:grid-cols-[400px_minmax(0,1fr)]">
-          <Card className="relative h-fit">
-            <CardHeader className="space-y-4">
-              <div className="flex items-start justify-between gap-3">
-                <CardTitle className="text-2xl">
-                  {(isNewGarmentMode && (!currentGarment.model || !currentGarment.brand || !currentGarment.type))
-                    ? 'New Garment'
-                    : `${currentGarment.model || 'Untitled'} ${currentGarment.type || ''}`.trim()}
-                </CardTitle>
-                {!isNewGarmentMode && (
-                  <FavoriteButton
-                    isFavorite={currentGarment.favorite}
-                    onClick={() => handleToggleFavorite(currentGarment.id!, currentGarment.favorite)}
+        <div className="mx-auto grid w-full max-w-[1700px] gap-6 lg:grid-cols-[440px_minmax(0,1fr)]">
+            <Card className="relative h-fit">
+              <CardHeader className="space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <CardTitle className="text-2xl">
+                    {(isNewGarmentMode && (!currentGarment.model || !currentGarment.brand || !currentGarment.type))
+                      ? 'New Garment'
+                      : (currentGarment.model || 'Untitled')}
+                  </CardTitle>
+                  {!isNewGarmentMode && (
+                    <FavoriteButton
+                      isFavorite={currentGarment.favorite}
+                      onClick={() => handleToggleFavorite(currentGarment.id!, currentGarment.favorite)}
+                    />
+                  )}
+                </div>
+                <p className="text-sm text-slate-600">
+                  {currentGarment.type || 'Type N/A'} by {currentGarment.brand || 'Brand N/A'}
+                </p>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-hidden rounded-xl p-1">
+                  <Image
+                    key={currentGarment.file_name || 'placeholder'}
+                    src={imagePreview || currentGarment.file_name || '/placeholder.png'}
+                    alt={currentGarment.model || 'Placeholder Image'}
+                    width={700}
+                    height={700}
+                    className="h-auto w-full object-contain"
                   />
-                )}
-              </div>
-              <p className="text-sm text-slate-600">
-                {currentGarment.type || 'Type N/A'} by {currentGarment.brand || 'Brand N/A'}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-medium text-white">
-                  {primaryColor}
-                </span>
-                <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">
-                  {currentGarment.style || 'Style N/A'}
-                </span>
-                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-900">
-                  {currentGarment.formality || 'Formality N/A'}
-                </span>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-hidden rounded-xl p-1">
-                <Image
-                  key={currentGarment.file_name || 'placeholder'}
-                  src={imagePreview || currentGarment.file_name || '/placeholder.png'}
-                  alt={currentGarment.model || 'Placeholder Image'}
-                  width={700}
-                  height={700}
-                  className="h-auto w-full object-contain"
-                />
-              </div>
-            </CardContent>
-          </Card>
+                </div>
+              </CardContent>
+            </Card>
 
           <form
             className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-start"
@@ -876,7 +855,11 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
             <Card className="lg:self-start">
               <CardContent className="pt-0">
                 <div className="flex flex-col gap-2">
-                  <SubmitButton pending={isPending || isUploading} className="mt-0 w-full" />
+                  <Button type="submit" className="w-full" disabled={isPending || isUploading}>
+                    {isPending || isUploading
+                      ? (isNewGarmentMode ? 'Creating...' : 'Saving...')
+                      : (isNewGarmentMode ? 'Create Garment' : 'Save Changes')}
+                  </Button>
                   <Button asChild variant="outline" className="w-full">
                     <Link href="/viewer">Cancel</Link>
                   </Button>

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { Garment, MaterialComposition } from '@/lib/types';
 
@@ -43,7 +44,15 @@ const colorMap: Record<string, string> = {
   'washed grey': '#A8A8A8',
 };
 
-export default function GarmentDetailsClient({ garment, schema }: { garment: Garment; schema: Schema }) {
+export default function GarmentDetailsClient({
+  garment,
+  schema,
+  canEdit = false,
+}: {
+  garment: Garment;
+  schema: Schema;
+  canEdit?: boolean;
+}) {
   const [isImageOpen, setIsImageOpen] = useState(false);
   const schemaProperties = schema.items.properties;
 
@@ -52,29 +61,26 @@ export default function GarmentDetailsClient({ garment, schema }: { garment: Gar
 
   const sortedMaterials = [...(garment.material_composition ?? [])].sort((a, b) => b.percentage - a.percentage);
   const colors = garment.color_palette ?? [];
-  const primaryMaterial = sortedMaterials[0]?.material ?? 'Material N/A';
+  const detailsGridClass = canEdit
+    ? 'grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-start'
+    : 'grid gap-4';
 
   return (
     <div className="box-border min-h-[calc(100dvh-65px)] bg-slate-100 p-4 md:p-6">
-      <div className="mx-auto mb-4 w-full max-w-6xl">
+      <div className="mx-auto mb-4 w-full max-w-[1700px]">
         <Link href="/viewer" className="text-sm font-medium text-slate-700 hover:text-slate-900 hover:underline">
           &larr; Back to Wardrobe
         </Link>
       </div>
 
-      <div className="mx-auto grid w-full max-w-7xl gap-6 lg:grid-cols-[440px_minmax(0,1fr)]">
-        <Card className="lg:sticky lg:top-20">
+      <div className="mx-auto grid w-full max-w-[1700px] gap-6 lg:grid-cols-[440px_minmax(0,1fr)]">
+        <Card>
           <CardHeader className="space-y-4">
             <div className="flex items-start justify-between gap-3">
               <CardTitle className="text-2xl">{garment.model}</CardTitle>
               {garment.favorite && <FiHeart fill="red" className="text-xl text-red-500" />}
             </div>
             <p className="text-sm text-slate-600">{garment.type} by {garment.brand}</p>
-            <div className="flex flex-wrap gap-2">
-              <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-medium text-white">{primaryMaterial}</span>
-              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">{garment.style || 'Style N/A'}</span>
-              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-900">{garment.formality || 'Formality N/A'}</span>
-            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="overflow-hidden rounded-xl p-1">
@@ -121,7 +127,8 @@ export default function GarmentDetailsClient({ garment, schema }: { garment: Gar
           </CardContent>
         </Card>
 
-        <div className="space-y-4">
+        <div className={detailsGridClass}>
+          <div className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle>Basic Information</CardTitle>
@@ -146,104 +153,117 @@ export default function GarmentDetailsClient({ garment, schema }: { garment: Gar
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Style & Formality</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <Label className="text-xs uppercase tracking-wide text-slate-500">Style</Label>
-                <p className="text-slate-900">{garment.style || 'Not set yet'}</p>
-              </div>
-              <div>
-                <Label className="text-xs uppercase tracking-wide text-slate-500">Formality</Label>
-                <p className="text-slate-900">{garment.formality || 'Not set yet'}</p>
-              </div>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Style & Formality</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label className="text-xs uppercase tracking-wide text-slate-500">Style</Label>
+                  <p className="text-slate-900">{garment.style || 'Not set yet'}</p>
+                </div>
+                <div>
+                  <Label className="text-xs uppercase tracking-wide text-slate-500">Formality</Label>
+                  <p className="text-slate-900">{garment.formality || 'Not set yet'}</p>
+                </div>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Material & Color</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div>
-                <Label className="mb-3 block text-xs uppercase tracking-wide text-slate-500">
-                  Material Composition
-                </Label>
-                {sortedMaterials.length > 0 ? (
-                  <div className="space-y-3">
-                    {sortedMaterials.map((material: MaterialComposition) => (
-                      <div key={`${material.material}-${material.percentage}`} className="space-y-1">
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="font-medium text-slate-900">{material.material}</span>
-                          <span className="text-slate-600">{material.percentage}%</span>
+            <Card>
+              <CardHeader>
+                <CardTitle>Material & Color</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div>
+                  <Label className="mb-3 block text-xs uppercase tracking-wide text-slate-500">
+                    Material Composition
+                  </Label>
+                  {sortedMaterials.length > 0 ? (
+                    <div className="space-y-3">
+                      {sortedMaterials.map((material: MaterialComposition) => (
+                        <div key={`${material.material}-${material.percentage}`} className="space-y-1">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="font-medium text-slate-900">{material.material}</span>
+                            <span className="text-slate-600">{material.percentage}%</span>
+                          </div>
+                          <div className="h-2 rounded-full bg-slate-200">
+                            <div
+                              className="h-2 rounded-full bg-slate-700"
+                              style={{ width: `${Math.max(0, Math.min(material.percentage, 100))}%` }}
+                            />
+                          </div>
                         </div>
-                        <div className="h-2 rounded-full bg-slate-200">
-                          <div
-                            className="h-2 rounded-full bg-slate-700"
-                            style={{ width: `${Math.max(0, Math.min(material.percentage, 100))}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-slate-500">No material composition assigned yet.</p>
-                )}
-              </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-500">No material composition assigned yet.</p>
+                  )}
+                </div>
 
-              <div>
-                <Label className="mb-3 block text-xs uppercase tracking-wide text-slate-500">Color Palette</Label>
-                {colors.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {colors.map((color) => (
-                      <span
-                        key={color}
-                        className="inline-flex items-center gap-2 rounded-full border bg-white px-3 py-1 text-sm text-slate-800"
-                      >
+                <div>
+                  <Label className="mb-3 block text-xs uppercase tracking-wide text-slate-500">Color Palette</Label>
+                  {colors.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {colors.map((color) => (
                         <span
-                          className="h-3 w-3 rounded-full border border-slate-300"
-                          style={{ backgroundColor: colorMap[color.toLowerCase()] || color.toLowerCase() }}
-                        />
-                        {color}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-slate-500">No colors assigned yet.</p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+                          key={color}
+                          className="inline-flex items-center gap-2 rounded-full border bg-white px-3 py-1 text-sm text-slate-800"
+                        >
+                          <span
+                            className="h-3 w-3 rounded-full border border-slate-300"
+                            style={{ backgroundColor: colorMap[color.toLowerCase()] || color.toLowerCase() }}
+                          />
+                          {color}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-500">No colors assigned yet.</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Suitability</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <Label className="text-xs uppercase tracking-wide text-slate-500">
-                  {schemaProperties.suitable_weather?.description ? 'Best For Weather' : 'Suitable Weather'}
-                </Label>
-                <p className="text-slate-900">{joinOrFallback(garment.suitable_weather, 'No weather profile assigned yet.')}</p>
-              </div>
-              <div>
-                <Label className="text-xs uppercase tracking-wide text-slate-500">
-                  {schemaProperties.suitable_time_of_day?.description ? 'Best Time Of Day' : 'Suitable Time Of Day'}
-                </Label>
-                <p className="text-slate-900">{joinOrFallback(garment.suitable_time_of_day, 'No time-of-day profile assigned yet.')}</p>
-              </div>
-              <div>
-                <Label className="text-xs uppercase tracking-wide text-slate-500">Best Places</Label>
-                <p className="text-slate-900">{joinOrFallback(garment.suitable_places, 'No places assigned yet.')}</p>
-              </div>
-              <div>
-                <Label className="text-xs uppercase tracking-wide text-slate-500">Best Occasions</Label>
-                <p className="text-slate-900">{joinOrFallback(garment.suitable_occasions, 'No occasions assigned yet.')}</p>
-              </div>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Suitability</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label className="text-xs uppercase tracking-wide text-slate-500">
+                    {schemaProperties.suitable_weather?.description ? 'Best For Weather' : 'Suitable Weather'}
+                  </Label>
+                  <p className="text-slate-900">{joinOrFallback(garment.suitable_weather, 'No weather profile assigned yet.')}</p>
+                </div>
+                <div>
+                  <Label className="text-xs uppercase tracking-wide text-slate-500">
+                    {schemaProperties.suitable_time_of_day?.description ? 'Best Time Of Day' : 'Suitable Time Of Day'}
+                  </Label>
+                  <p className="text-slate-900">{joinOrFallback(garment.suitable_time_of_day, 'No time-of-day profile assigned yet.')}</p>
+                </div>
+                <div>
+                  <Label className="text-xs uppercase tracking-wide text-slate-500">Best Places</Label>
+                  <p className="text-slate-900">{joinOrFallback(garment.suitable_places, 'No places assigned yet.')}</p>
+                </div>
+                <div>
+                  <Label className="text-xs uppercase tracking-wide text-slate-500">Best Occasions</Label>
+                  <p className="text-slate-900">{joinOrFallback(garment.suitable_occasions, 'No occasions assigned yet.')}</p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {canEdit && (
+            <Card className="lg:self-start">
+              <CardContent className="pt-0">
+                <div className="flex flex-col gap-2">
+                  <Button asChild className="w-full">
+                    <Link href={`/editor?garmentId=${garment.id}`}>Edit</Link>
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </div>

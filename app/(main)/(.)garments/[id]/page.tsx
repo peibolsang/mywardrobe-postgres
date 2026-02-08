@@ -2,6 +2,8 @@
 import { Garment } from "@/lib/types";
 import GarmentModalClient from "@/components/client/garment-modal-client";
 import { neon } from '@neondatabase/serverless';
+import { auth } from "@/lib/auth";
+import { redirect } from "next/navigation";
 
 async function getGarment(id: string): Promise<Garment | null> {
   const sql = neon(process.env.DATABASE_URL!);
@@ -22,6 +24,11 @@ async function getGarment(id: string): Promise<Garment | null> {
 }
 
 export default async function GarmentModal({ params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const session = await auth();
+  if (!session) {
+    redirect('/login');
+  }
+
   const params = await paramsPromise;
   const garment = await getGarment(params.id);
 

@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useSession, signOut } from "next-auth/react";
 
-import { Shirt, Edit3, BarChart3, User, LogOut, LogIn, Sparkles } from "lucide-react"
+import { Shirt, BarChart3, LogOut, LogIn } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
@@ -23,12 +23,6 @@ const links = [
     label: "My Wardrobe",
     icon: Shirt,
     description: "Browse your collection",
-  },
-  {
-    href: "/editor",
-    label: "Wardrobe Editor",
-    icon: Edit3,
-    description: "Add & edit items",
   },
   {
     href: "/stats",

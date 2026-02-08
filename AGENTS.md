@@ -53,8 +53,10 @@ Use imperative commit subjects.
 ## Common user workflows
 1. Sign in with magic link (`/login`).
 2. Browse and filter wardrobe (`/viewer`), open modal or full garment detail.
-3. Add/edit garments in editor flows (`/editor`, `/add-garment`) including image upload (owner-only).
-4. View distribution analytics in `/stats`.
+3. From garment detail (`/garments/[id]`), use the `Edit` action card to open owner-only edit mode for that specific garment (`/editor?garmentId=<id>`).
+4. Add new garments via `/add-garment` (owner-only), including image upload.
+5. View distribution analytics in `/stats`.
+6. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
 
 ## Rendering strategy
 1. Server components (`app/(main)/*`) handle initial auth checks and data loading.
@@ -64,12 +66,23 @@ Use imperative commit subjects.
 ## Authorization strategy
 - `EDITOR_OWNER_EMAIL` is the single source of truth for editor authorization.
 - Route-level protection:
+  - `/garments/[id]` (full detail and intercept modal) requires authenticated session; unauthenticated users are redirected to `/login`.
   - `/editor` and `/add-garment` require authenticated owner session, otherwise redirect (`/login`) or `notFound()`.
+  - `/editor` accepts optional query param `garmentId` to initialize the editor on a specific garment.
+  - Garment details (`/garments/[id]`) only render the `Edit` action card in UI for owner sessions.
+- Middleware-level protection:
+  - `app/middleware.ts` applies auth gate on `/garments/*` (session required) and `/editor/*` (owner required) for defense-in-depth.
 - API-level protection:
   - `/api/wardrobe`, `/api/editor-options`, and `/api/upload` require authenticated owner session (`403` on failure).
 - Mutation-level protection:
   - `createGarment`, `updateGarment`, and `deleteGarment` enforce owner checks server-side regardless of UI access.
 - Rule: UI guards are convenience; server-side guards are mandatory.
+
+## Authentication hardening
+- Magic-link delivery (`next-auth` email provider + Resend) includes async error handling and best-effort in-memory throttling:
+  - short cooldown between repeated requests per identifier
+  - max request count per rolling time window
+- `AUTH_EMAIL_FROM` can be used to configure sender address; fallback is `onboarding@resend.dev`.
 
 ## Caching strategy: 
 - Shared wardrobe reads are centralized in `lib/wardrobe.ts` via `getWardrobeData()`.

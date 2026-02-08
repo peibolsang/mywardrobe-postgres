@@ -1,6 +1,9 @@
 import { sql } from "@/lib/db";
 import { Garment } from "@/lib/types";
 import GarmentDetailsClient from "@/components/client/garment-details-client";
+import { isOwnerSession } from "@/lib/owner";
+import { auth } from "@/lib/auth";
+import { redirect } from "next/navigation";
 import { promises as fs } from 'fs';
 import path from 'path';
 
@@ -90,13 +93,19 @@ export const metadata = {
 };
 
 export default async function GarmentPage({ params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const session = await auth();
+  if (!session) {
+    redirect('/login');
+  }
+
   const params = await paramsPromise;
   const garment = await getGarment(params.id);
   const schema = await getSchema();
+  const canEdit = await isOwnerSession();
 
   if (!garment) {
     return <div className="flex justify-center items-center min-h-screen">Garment not found.</div>;
   }
 
-  return <GarmentDetailsClient garment={garment} schema={schema} />;
+  return <GarmentDetailsClient garment={garment} schema={schema} canEdit={canEdit} />;
 }
