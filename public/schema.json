@@ -50,8 +50,7 @@
       "color_palette": {
         "type": "array",
         "items": {
-          "type": "string",
-          "enum": ["beige", "black", "blue", "blue chambray", "blue denim", "bone", "brown", "charcoal", "corduroy", "dark brown", "dark indigo", "green", "grey", "gum", "heather grey", "khaki", "light grey", "medium wash blue", "off-white", "olive green", "raw indigo", "russet", "sage green", "tan", "washed grey", "white", "yellow"]
+          "type": "string"
         },
         "description": "An array of dominant colors or color patterns in the garment (e.g., ['blue', 'white'], ['black'], ['floral print'])."
       },
@@ -75,7 +74,7 @@
         "type": "array",
         "items": {
           "type": "string",
-          "enum": ["bar", "beach", "cabin", "city", "concert", "country club", "countryside", "golf course", "gym", "mountains", "office", "outdoors", "park", "pub", "ranch", "resort", "restaurant", "skatepark", "tennis court", "travel", "work from home", "workshop"]
+          "enum": ["Metropolitan / City", "Creative Studio / Atelier", "Hospitality (Indoor)", "Coastal / Beach", "Countryside / Estate", "Wilderness", "Workshop", "Transit Hub / Airport", "Office / Boardroom"]
         },
         "description": "An array of places or environments where the garment would be appropriate (e.g., 'work from home', 'office', 'church', 'restaurant', 'park', 'gym', 'beach', 'city', 'countryside')."
       },
@@ -83,7 +82,7 @@
         "type": "array",
         "items": {
           "type": "string",
-          "enum": ["beach", "brunch", "camping", "casual gathering", "city walk", "concert", "country fair", "daily life", "date night", "exercise", "golf", "hiking", "horseback riding", "manual labor", "night out", "travel", "vacation", "wedding", "work"]
+          "enum": ["Black Tie / Evening Wear", "Business Formal", "Casual Social", "Date Night / Intimate Dinner", "Outdoor Social / Garden Party", "Active Rugged / Field Sports", "Spectator Sports", "Active Transit / Commuting", "Manual Labor / Craft", "Errands / Low-Key Social", "Ceremonial / Wedding"]
         },
         "description": "An array of occasions for which the garment is suitable (e.g., 'daily life', 'work', 'family walk', 'city walk', 'formal event', 'casual gathering', 'exercise', 'party', 'travel')."
       },
