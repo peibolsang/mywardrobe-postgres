@@ -7,6 +7,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { Toaster } from '../components/ui/sonner';
 import { toast } from 'sonner';
+import { Trash2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
@@ -16,7 +17,6 @@ import { Label } from '../components/ui/label';
 import { MultiSelect } from '../components/ui/multi-select';
 import { CreatableCombobox } from '../components/ui/creatable-combobox';
 import { CreatableMultiSelect } from '../components/ui/creatable-multi-select';
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
 import { cn } from '../lib/utils';
 import { createGarment, updateGarment, deleteGarment } from '@/actions/garment'; // Import Server Actions
 import { useActionState } from 'react'; // Import new React 19 hooks
@@ -426,10 +426,39 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
   const currentGarment = formData;
   const schemaProperties = schemaData?.items.properties;
   const hasExistingGarments = wardrobeData.length > 0;
+  const primaryColor = currentGarment?.color_palette?.[0] || 'Color N/A';
+  const getDisplayFileName = (rawFileName: string | null | undefined) => {
+    const source = (fileName ?? rawFileName ?? '').trim();
+    if (!source) return 'No file chosen';
+
+    const withoutQuery = source.split('?')[0];
+    const segment = withoutQuery.split('/').pop() || withoutQuery;
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      return segment;
+    }
+  };
 
   const renderInputField = (key: string, prop: SchemaProperty, value: any) => {
     const isRequired = schemaData?.items.required.includes(key);
-    const labelText = `${key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}${isRequired ? ' *' : ''}`;
+    const viewerLabelMap: Record<string, string> = {
+      file_name: 'Garment Image',
+      model: 'Model',
+      brand: 'Brand',
+      type: 'Type',
+      features: 'Features',
+      style: 'Style',
+      formality: 'Formality',
+      material_composition: 'Material Composition',
+      color_palette: 'Color Palette',
+      suitable_weather: 'Best For Weather',
+      suitable_time_of_day: 'Best Time Of Day',
+      suitable_places: 'Best Places',
+      suitable_occasions: 'Best Occasions',
+    };
+    const labelText = `${viewerLabelMap[key] || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}${isRequired ? ' *' : ''}`;
+    const labelClassName = "mb-2 block text-xs uppercase tracking-wide text-slate-500";
     const placeholderText = prop.description || `Enter ${key.replace(/_/g, ' ')}`;
     const hasError = validationErrors[key];
 
@@ -438,7 +467,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
         if (key === 'features') {
           return (
             <>
-              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
+              <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
               <Textarea
                 name={key}
                 value={value}
@@ -450,10 +479,11 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
             </>
           );
         } else if (key === 'file_name') {
+          const displayFileName = getDisplayFileName(currentGarment?.file_name);
           return (
             <>
-              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
-              <div className="flex items-center">
+              <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
+              <div className="flex min-w-0 items-center gap-3">
                 <Input
                   type="file"
                   name={key}
@@ -469,12 +499,12 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                   type="button"
                   onClick={() => inputFileRef.current?.click()} // Trigger the hidden file input
                   variant="outline"
-                  className="mr-4 hover:bg-gray-100"
+                  className="shrink-0 hover:bg-gray-100"
                 >
                   Choose File
                 </Button>
-                <span className="text-sm text-gray-500">
-                  {fileName || (currentGarment && currentGarment.file_name ? currentGarment.file_name.split('/').pop() : 'No file chosen')}
+                <span className="min-w-0 truncate text-sm text-gray-500" title={displayFileName}>
+                  {displayFileName}
                 </span>
               </div>
               {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
@@ -483,7 +513,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
         } else if (key === 'type') {
           return (
             <>
-              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
+              <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
               <CreatableCombobox
                 options={mergeUniqueStrings([...typeOptions, value])}
                 value={value}
@@ -501,7 +531,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
         } else if (prop.enum) {
           return (
             <>
-              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
+              <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
               <Select onValueChange={(val) => handleSelectChange(key, val)} value={value}>
                 <SelectTrigger className={cn("w-full", hasError && 'border-red-500')}>
                   <SelectValue placeholder={placeholderText} />
@@ -520,7 +550,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
         } else {
           return (
             <>
-              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
+              <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
               <Input
                 type="text"
                 name={key}
@@ -536,7 +566,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
       case 'integer':
         return (
           <>
-            <Label htmlFor={key}>{labelText}</Label>
+            <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
             <Input
               type="number"
               name={key}
@@ -552,7 +582,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
         if (key === 'material_composition') {
           return (
             <div>
-              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
+              <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
               {(value as MaterialComposition[]).map((mc, index) => (
                 <div key={index} className="mb-2 grid grid-cols-[minmax(0,1fr)_120px_auto] items-center gap-2">
                   <CreatableCombobox
@@ -576,10 +606,12 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
                   <Button
                     type="button"
                     onClick={() => handleRemoveMaterial(index)}
-                    variant="destructive"
+                    variant="outline"
                     size="icon"
+                    className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
+                    aria-label="Remove material"
                   >
-                    X
+                    <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
               ))}
@@ -592,7 +624,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
         } else if (key === 'color_palette') {
           return (
             <>
-              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
+              <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
               <CreatableMultiSelect
                 options={mergeUniqueStrings([...colorOptions, ...(value as string[])])}
                 selected={value as string[]}
@@ -610,7 +642,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
         } else if (prop.items?.enum) {
           return (
             <>
-              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
+              <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
               <MultiSelect
                 options={prop.items.enum as string[]}
                 selected={value as string[]}
@@ -623,7 +655,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
         } else {
           return (
             <>
-              <Label htmlFor={key} className="mb-2 block">{labelText}</Label>
+              <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
               <Input
                 type="text"
                 name={key}
@@ -639,7 +671,7 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
       default:
         return (
           <>
-            <Label htmlFor={key}>{labelText}</Label>
+            <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
             <Input
               type="text"
               name={key}
@@ -655,30 +687,32 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
   };
 
   return (
-    <div className={cn(
-      "min-h-screen bg-gray-100 flex flex-col items-center p-4",
-      isNewGarmentModeProp ? "justify-start pt-6" : "justify-start pt-6"
-    )}>
+    <div className="box-border min-h-[calc(100dvh-65px)] bg-slate-100 p-4 md:p-6">
       <Toaster />
 
-      
-
-      {!isNewGarmentMode && hasExistingGarments && (
-        <div className="flex items-center justify-between w-full max-w-5xl mb-4">
-          <Button onClick={handlePrev} variant="outline">
-            Previous
-          </Button>
-          <span className="text-sm">
-            {currentIndex + 1} / {wardrobeData.length}
-          </span>
-          <Button onClick={handleNext} variant="outline">
-            Next
-          </Button>
+      <div className="mx-auto mb-4 w-full max-w-[1700px]">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <Link href="/viewer" className="text-sm font-medium text-slate-700 hover:text-slate-900 hover:underline">
+            &larr; Back to Wardrobe
+          </Link>
+          {!isNewGarmentMode && hasExistingGarments && (
+            <div className="grid w-[220px] grid-cols-[1fr_auto_1fr] items-center">
+              <Button onClick={handlePrev} variant="outline" size="sm" className="justify-self-start">
+                Previous
+              </Button>
+              <span className="min-w-14 text-center text-sm text-slate-600">
+                {currentIndex + 1} / {wardrobeData.length}
+              </span>
+              <Button onClick={handleNext} variant="outline" size="sm" className="justify-self-end">
+                Next
+              </Button>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {!isNewGarmentMode && !hasExistingGarments && (
-        <Card className="w-full max-w-5xl">
+        <Card className="mx-auto w-full max-w-5xl">
           <CardHeader>
             <CardTitle className="text-center text-2xl">No garments available</CardTitle>
           </CardHeader>
@@ -693,182 +727,174 @@ export default function EditorForm({ isNewGarmentMode: isNewGarmentModeProp = fa
 
 
       {currentGarment && schemaProperties && (
-        <Card className="w-full max-w-5xl relative">
-          {!isNewGarmentMode && (
-            <>
-              <FavoriteButton
-                isFavorite={currentGarment.favorite}
-                onClick={() => handleToggleFavorite(currentGarment.id!, currentGarment.favorite)}
-              />
-              <Button
-                variant="destructive"
-                size="sm"
-                className="absolute top-4 right-16" // Position next to favorite button
-                onClick={() => handleDelete(currentGarment.id!)}
-              >
-                Delete
-              </Button>
-            </>
-          )}
-          <CardHeader>
-            <CardTitle className="text-center text-2xl">
-              {(isNewGarmentMode && (!currentGarment.model || !currentGarment.brand || !currentGarment.type))
-                ? "New Garment"
-                : `${currentGarment.model} ${currentGarment.type}, by ${currentGarment.brand}`}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col md:flex-row gap-6">
-              <div className="md:w-1/2 flex flex-col items-center justify-start p-4 relative">
+        <div className="mx-auto grid w-full max-w-[1700px] gap-6 lg:grid-cols-[400px_minmax(0,1fr)]">
+          <Card className="relative h-fit">
+            <CardHeader className="space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <CardTitle className="text-2xl">
+                  {(isNewGarmentMode && (!currentGarment.model || !currentGarment.brand || !currentGarment.type))
+                    ? 'New Garment'
+                    : `${currentGarment.model || 'Untitled'} ${currentGarment.type || ''}`.trim()}
+                </CardTitle>
+                {!isNewGarmentMode && (
+                  <FavoriteButton
+                    isFavorite={currentGarment.favorite}
+                    onClick={() => handleToggleFavorite(currentGarment.id!, currentGarment.favorite)}
+                  />
+                )}
+              </div>
+              <p className="text-sm text-slate-600">
+                {currentGarment.type || 'Type N/A'} by {currentGarment.brand || 'Brand N/A'}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-medium text-white">
+                  {primaryColor}
+                </span>
+                <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">
+                  {currentGarment.style || 'Style N/A'}
+                </span>
+                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-900">
+                  {currentGarment.formality || 'Formality N/A'}
+                </span>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-hidden rounded-xl p-1">
                 <Image
                   key={currentGarment.file_name || 'placeholder'}
                   src={imagePreview || currentGarment.file_name || '/placeholder.png'}
                   alt={currentGarment.model || 'Placeholder Image'}
-                  width={400}
-                  height={400}
-                  className="object-contain"
+                  width={700}
+                  height={700}
+                  className="h-auto w-full object-contain"
                 />
               </div>
+            </CardContent>
+          </Card>
 
-              <form
-                className="md:w-1/2 p-4"
-                onSubmit={async (event) => {
-                  event.preventDefault();
-                  if (!currentGarment) return;
+          <form
+            className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-start"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              if (!currentGarment) return;
 
-                  const errors = validateForm(currentGarment);
-                  setValidationErrors(errors);
-                  if (Object.keys(errors).length > 0) {
-                    toast.error('Please fix the highlighted fields before saving.');
-                    return;
-                  }
+              const errors = validateForm(currentGarment);
+              setValidationErrors(errors);
+              if (Object.keys(errors).length > 0) {
+                toast.error('Please fix the highlighted fields before saving.');
+                return;
+              }
 
-                  const form = event.target as HTMLFormElement;
-                  const formDataForAction = new FormData(form);
+              const form = event.target as HTMLFormElement;
+              const formDataForAction = new FormData(form);
 
-                  try {
-                    setIsUploading(true);
-                    const file = inputFileRef.current?.files?.[0];
+              try {
+                setIsUploading(true);
+                const file = inputFileRef.current?.files?.[0];
 
-                    if (file) {
-                      const newBlob = await upload(file.name, file, {
-                        access: 'public',
-                        handleUploadUrl: '/api/upload',
-                      });
-                      formDataForAction.set('file_name', newBlob.url);
-                    } else if (!isNewGarmentMode) {
-                      formDataForAction.set('file_name', currentGarment?.file_name || '');
-                    }
+                if (file) {
+                  const newBlob = await upload(file.name, file, {
+                    access: 'public',
+                    handleUploadUrl: '/api/upload',
+                  });
+                  formDataForAction.set('file_name', newBlob.url);
+                } else if (!isNewGarmentMode) {
+                  formDataForAction.set('file_name', currentGarment?.file_name || '');
+                }
 
-                    if (isNewGarmentMode) {
-                      startTransition(() => createFormAction(formDataForAction));
-                    } else {
-                      startTransition(() => updateFormAction(formDataForAction));
-                    }
-                  } finally {
-                    setIsUploading(false);
-                  }
-                }}
-              >
-                {/* Hidden input for ID when updating */}
-                {currentGarment.id && (
-                  <input type="hidden" name="id" value={currentGarment.id} />
-                )}
-                
-                {/* Hidden input for favorite status */}
-                <input type="hidden" name="favorite" value={String(currentGarment.favorite)} />
+                if (isNewGarmentMode) {
+                  startTransition(() => createFormAction(formDataForAction));
+                } else {
+                  startTransition(() => updateFormAction(formDataForAction));
+                }
+              } finally {
+                setIsUploading(false);
+              }
+            }}
+          >
+            {currentGarment.id && (
+              <input type="hidden" name="id" value={currentGarment.id} />
+            )}
+            <input type="hidden" name="favorite" value={String(currentGarment.favorite)} />
+            <input type="hidden" name="type" value={currentGarment.type || ''} />
+            <input type="hidden" name="colors" value={JSON.stringify(currentGarment.color_palette)} />
+            <input type="hidden" name="suitableWeathers" value={JSON.stringify(currentGarment.suitable_weather)} />
+            <input type="hidden" name="suitableTimesOfDay" value={JSON.stringify(currentGarment.suitable_time_of_day)} />
+            <input type="hidden" name="suitablePlaces" value={JSON.stringify(currentGarment.suitable_places)} />
+            <input type="hidden" name="suitableOccasions" value={JSON.stringify(currentGarment.suitable_occasions)} />
+            <input type="hidden" name="materials" value={JSON.stringify(currentGarment.material_composition.map(m => ({ material: m.material, percentage: m.percentage })))} />
+            <input type="hidden" name="style" value={currentGarment.style || ''} />
+            <input type="hidden" name="formality" value={currentGarment.formality || ''} />
 
-                {/* Hidden input for custom combobox fields */}
-                <input type="hidden" name="type" value={currentGarment.type || ''} />
+            <div className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Basic Information</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>{renderInputField('file_name', { type: 'string', description: 'Image file' }, currentGarment.file_name)}</div>
+                  <div>{renderInputField('model', schemaProperties.model, currentGarment.model)}</div>
+                  <div>{renderInputField('brand', schemaProperties.brand, currentGarment.brand)}</div>
+                  <div>{renderInputField('type', schemaProperties.type, currentGarment.type)}</div>
+                  <div>{renderInputField('features', schemaProperties.features, currentGarment.features)}</div>
+                </CardContent>
+              </Card>
 
-                {/* Hidden inputs for multi-select fields */}
-                <input type="hidden" name="colors" value={JSON.stringify(currentGarment.color_palette)} />
-                <input type="hidden" name="suitableWeathers" value={JSON.stringify(currentGarment.suitable_weather)} />
-                <input type="hidden" name="suitableTimesOfDay" value={JSON.stringify(currentGarment.suitable_time_of_day)} />
-                <input type="hidden" name="suitablePlaces" value={JSON.stringify(currentGarment.suitable_places)} />
-                <input type="hidden" name="suitableOccasions" value={JSON.stringify(currentGarment.suitable_occasions)} />
-                <input type="hidden" name="materials" value={JSON.stringify(currentGarment.material_composition.map(m => ({ material: m.material, percentage: m.percentage })))} />
+              <Card>
+                <CardHeader>
+                  <CardTitle>Style & Formality</CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-4 sm:grid-cols-2">
+                  <div>{renderInputField('style', schemaProperties.style, currentGarment.style)}</div>
+                  <div>{renderInputField('formality', schemaProperties.formality, currentGarment.formality)}</div>
+                </CardContent>
+              </Card>
 
-                {/* Hidden inputs for single-select fields */}
-                <input type="hidden" name="style" value={currentGarment.style || ''} />
-                <input type="hidden" name="formality" value={currentGarment.formality || ''} />
+              <Card>
+                <CardHeader>
+                  <CardTitle>Material & Color</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>{renderInputField('material_composition', schemaProperties.material_composition, currentGarment.material_composition)}</div>
+                  <div>{renderInputField('color_palette', schemaProperties.color_palette, currentGarment.color_palette)}</div>
+                </CardContent>
+              </Card>
 
-                <Accordion type="multiple" className="w-full">
-                  <AccordionItem value="item-1">
-                    <AccordionTrigger>Basic Information</AccordionTrigger>
-                    <AccordionContent>
-                      <div>
-                        <div className="mb-4">
-                          {renderInputField('file_name', { type: 'string', description: 'Image file' }, currentGarment.file_name)}
-                          </div>
-                        <div className="mb-4">
-                          {renderInputField('model', schemaProperties.model, currentGarment.model)}
-                        </div>
-                        <div className="mb-4">
-                          {renderInputField('brand', schemaProperties.brand, currentGarment.brand)}
-                        </div>
-                        <div className="mb-4">
-                          {renderInputField('type', schemaProperties.type, currentGarment.type)}
-                        </div>
-                        <div className="mb-4">
-                          {renderInputField('features', schemaProperties.features, currentGarment.features)}
-                        </div>
-                      </div>
-                    </AccordionContent>
-                  </AccordionItem>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Suitability</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>{renderInputField('suitable_weather', schemaProperties.suitable_weather, currentGarment.suitable_weather)}</div>
+                  <div>{renderInputField('suitable_time_of_day', schemaProperties.suitable_time_of_day, currentGarment.suitable_time_of_day)}</div>
+                  <div>{renderInputField('suitable_places', schemaProperties.suitable_places, currentGarment.suitable_places)}</div>
+                  <div>{renderInputField('suitable_occasions', schemaProperties.suitable_occasions, currentGarment.suitable_occasions)}</div>
+                </CardContent>
+              </Card>
+            </div>
 
-                  <AccordionItem value="item-2">
-                    <AccordionTrigger>Style & Formality</AccordionTrigger>
-                    <AccordionContent>
-                      <div className="mb-4">
-                        {renderInputField('style', schemaProperties.style, currentGarment.style)}
-                      </div>
-                      <div className="mb-4">
-                        {renderInputField('formality', schemaProperties.formality, currentGarment.formality)}
-                      </div>
-                    </AccordionContent>
-                  </AccordionItem>
-
-                  <AccordionItem value="item-3">
-                    <AccordionTrigger>Material & Color</AccordionTrigger>
-                    <AccordionContent>
-                      <div className="mb-4 w-full">
-                        {renderInputField('material_composition', schemaProperties.material_composition, currentGarment.material_composition)}
-                      </div>
-                      <div className="mb-4 w-full">
-                        {renderInputField('color_palette', schemaProperties.color_palette, currentGarment.color_palette)}
-                      </div>
-                    </AccordionContent>
-                  </AccordionItem>
-
-                  <AccordionItem value="item-4">
-                    <AccordionTrigger>Suitability</AccordionTrigger>
-                    <AccordionContent>
-                      <div className="mb-4 w-full">
-                        {renderInputField('suitable_weather', schemaProperties.suitable_weather, currentGarment.suitable_weather)}
-                      </div>
-                      <div className="mb-4 w-full">
-                        {renderInputField('suitable_time_of_day', schemaProperties.suitable_time_of_day, currentGarment.suitable_time_of_day)}
-                      </div>
-                      <div className="mb-4 w-full">
-                        {renderInputField('suitable_places', schemaProperties.suitable_places, currentGarment.suitable_places)}
-                      </div>
-                      <div className="mb-4 w-full">
-                        {renderInputField('suitable_occasions', schemaProperties.suitable_occasions, currentGarment.suitable_occasions)}
-                      </div>
-                    </AccordionContent>
-                  </AccordionItem>
-                </Accordion>
-                <div className="flex flex-col mt-4 space-y-2">
-                  <SubmitButton pending={isPending || isUploading} />
+            <Card className="lg:self-start">
+              <CardContent className="pt-0">
+                <div className="flex flex-col gap-2">
+                  <SubmitButton pending={isPending || isUploading} className="mt-0 w-full" />
                   <Button asChild variant="outline" className="w-full">
                     <Link href="/viewer">Cancel</Link>
                   </Button>
+                  {!isNewGarmentMode && (
+                    <Button
+                      variant="outline"
+                      className="w-full border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
+                      onClick={() => handleDelete(currentGarment.id!)}
+                    >
+                      Delete
+                    </Button>
+                  )}
                 </div>
-              </form>
-            </div>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+
+          </form>
+        </div>
       )}
     </div>
   );

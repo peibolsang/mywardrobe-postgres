@@ -2,17 +2,19 @@
 
 import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface SubmitButtonProps {
   pending?: boolean;
+  className?: string;
 }
 
-export function SubmitButton({ pending = false }: SubmitButtonProps) {
+export function SubmitButton({ pending = false, className }: SubmitButtonProps) {
   const { pending: formPending } = useFormStatus();
   const isPending = pending || formPending;
 
   return (
-    <Button type="submit" className="mt-4 w-full cursor-pointer" disabled={isPending}>
+    <Button type="submit" className={cn("mt-4 w-full cursor-pointer", className)} disabled={isPending}>
       {isPending ? (
         <span className="flex items-center">
           <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
