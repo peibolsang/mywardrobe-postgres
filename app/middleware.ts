@@ -15,8 +15,8 @@ export default auth((req) => {
     }
   }
 
-  // Guard owner-only editor subtree
-  if (nextUrl.pathname.startsWith("/editor")) {
+  // Guard owner-only editor and AI look subtrees
+  if (nextUrl.pathname.startsWith("/editor") || nextUrl.pathname.startsWith("/ai-look")) {
     if (!email) {
       const url = new URL("/login", nextUrl);
       return NextResponse.redirect(url);
@@ -31,5 +31,5 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/editor/:path*", "/garments/:path*"],
+  matcher: ["/editor/:path*", "/ai-look/:path*", "/garments/:path*"],
 };

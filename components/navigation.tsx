@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useSession, signOut } from "next-auth/react";
 
-import { Shirt, BarChart3, LogOut, LogIn } from "lucide-react"
+import { Shirt, BarChart3, Sparkles, LogOut, LogIn } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
@@ -29,6 +29,12 @@ const links = [
     label: "Wardrobe Stats",
     icon: BarChart3,
     description: "View analytics",
+  },
+  {
+    href: "/ai-look",
+    label: "AI Look",
+    icon: Sparkles,
+    description: "Get one full outfit",
   },
 ]
 

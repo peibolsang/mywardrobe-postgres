@@ -56,25 +56,36 @@ Use imperative commit subjects.
 3. From garment detail (`/garments/[id]`), use the `Edit` action card to open owner-only edit mode for that specific garment (`/editor?garmentId=<id>`).
 4. Add new garments via `/add-garment` (owner-only), including image upload.
 5. View distribution analytics in `/stats`.
-6. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
+6. Generate a single AI outfit recommendation via `/ai-look` (owner-only) using free-text prompt input.
+7. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
 
 ## Rendering strategy
 1. Server components (`app/(main)/*`) handle initial auth checks and data loading.
 2. Client components (`components/client/*` and interactive feature components) manage filters, dialogs, local form state, toasts, and URL state.
 3. Server actions (`actions/garment.ts`) own write operations, authorization checks, redirects, and cache invalidation.
 4. Editor pages (`/editor`, `/add-garment`) preload wardrobe/schema/editor-options server-side and render `EditorForm` inside `Suspense` with a layout-matching skeleton fallback to avoid empty-state flash and layout shift.
+5. AI look page (`/ai-look`) is route-guarded server-side and renders a client recommender UI that calls an owner-protected API route (`/api/ai-look`) using Vercel AI SDK + OpenAI.
+6. `/api/ai-look` uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) look generation constrained to wardrobe IDs, plus deterministic match scoring blended with model confidence.
+7. AI look generation optionally enriches free-text prompts with live weather context (location extracted from user text -> geocoded -> weather summary) before recommendation.
+
+## AI Look Agent (2-Step Summary)
+1. Step 1 (Interpretation): `/api/ai-look` maps free-text user input into canonical wardrobe intent (`weather`, `occasion`, `place`, `timeOfDay`, `formality`, `style`) using structured output.
+2. Step 1 tool-calling: During interpretation, the model can invoke `getWeatherByLocation` (AI SDK tool) to fetch live weather from OpenWeather for location-aware prompts.
+3. Step 2 (Recommendation): The model receives the interpreted canonical intent + wardrobe JSON and returns exactly one wardrobe-only look (`selectedGarmentIds` ordered top-to-bottom, rationale, model confidence).
+4. Server-side validation and scoring: Returned IDs are validated against DB garments, rationale is sanitized (no IDs), and final confidence blends model confidence with deterministic match scoring.
+5. UI exposure: `/ai-look` displays look title, lineup, rationale, and an optional details accordion (confidence breakdown, interpreted intent, and live weather status when available).
 
 ## Authorization strategy
 - `EDITOR_OWNER_EMAIL` is the single source of truth for editor authorization.
 - Route-level protection:
   - `/garments/[id]` (full detail and intercept modal) requires authenticated session; unauthenticated users are redirected to `/login`.
-  - `/editor` and `/add-garment` require authenticated owner session, otherwise redirect (`/login`) or `notFound()`.
+  - `/editor`, `/add-garment`, and `/ai-look` require authenticated owner session, otherwise redirect (`/login`) or `notFound()`.
   - `/editor` accepts optional query param `garmentId` to initialize the editor on a specific garment.
   - Garment details (`/garments/[id]`) only render the `Edit` action card in UI for owner sessions.
 - Middleware-level protection:
-  - `app/middleware.ts` applies auth gate on `/garments/*` (session required) and `/editor/*` (owner required) for defense-in-depth.
+  - `app/middleware.ts` applies auth gate on `/garments/*` (session required) and owner gate on `/editor/*` + `/ai-look/*` for defense-in-depth.
 - API-level protection:
-  - `/api/wardrobe`, `/api/editor-options`, and `/api/upload` require authenticated owner session (`403` on failure).
+  - `/api/wardrobe`, `/api/editor-options`, `/api/upload`, and `/api/ai-look` require authenticated owner session (`403` on failure).
 - Mutation-level protection:
   - `createGarment`, `updateGarment`, and `deleteGarment` enforce owner checks server-side regardless of UI access.
 - Rule: UI guards are convenience; server-side guards are mandatory.
@@ -104,6 +115,9 @@ Use imperative commit subjects.
 - `resend`
 - Radix UI primitives
 - `recharts`
+- `ai` (Vercel AI SDK)
+- `@ai-sdk/openai`
+- `zod`
 - `sonner`
 - `lucide-react`
 - `react-icons`
