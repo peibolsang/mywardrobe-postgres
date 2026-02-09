@@ -571,8 +571,13 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
 
     revalidateTag('garments'); // Invalidate cache for garments
 
+    redirect(`/garments/${id}?updated=1`);
+
     return { message: 'Garment updated successfully!', status: 'success' };
-  } catch (error) {
+  } catch (error: any) {
+    if (error.digest?.startsWith('NEXT_REDIRECT')) {
+      throw error;
+    }
     console.error('Failed to update garment:', error);
     return { message: 'Failed to update garment.', status: 'error' };
   }

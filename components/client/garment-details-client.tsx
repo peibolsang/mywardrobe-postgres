@@ -1,13 +1,16 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FiHeart } from 'react-icons/fi';
 import Link from 'next/link';
 import Image from 'next/image';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { Toaster } from '@/components/ui/sonner';
 import { Garment, MaterialComposition } from '@/lib/types';
+import { toast } from 'sonner';
 
 interface SchemaProperty {
   type: string;
@@ -54,7 +57,24 @@ export default function GarmentDetailsClient({
   canEdit?: boolean;
 }) {
   const [isImageOpen, setIsImageOpen] = useState(false);
+  const hasShownUpdateToastRef = useRef(false);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const schemaProperties = schema.items.properties;
+
+  useEffect(() => {
+    const wasUpdated = searchParams.get('updated') === '1';
+    if (!wasUpdated || hasShownUpdateToastRef.current) return;
+
+    hasShownUpdateToastRef.current = true;
+    toast.success('Garment updated successfully!');
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete('updated');
+    const nextUrl = nextParams.toString() ? `${pathname}?${nextParams.toString()}` : pathname;
+    router.replace(nextUrl, { scroll: false });
+  }, [pathname, router, searchParams]);
 
   const joinOrFallback = (values: string[] | undefined, fallback: string) =>
     Array.isArray(values) && values.length > 0 ? values.join(', ') : fallback;
@@ -68,6 +88,7 @@ export default function GarmentDetailsClient({
 
   return (
     <div className="box-border min-h-[calc(100dvh-65px)] bg-slate-100 p-4 md:p-6">
+      <Toaster />
       <div className="mx-auto mb-4 w-full max-w-[1700px]">
         <Link href="/viewer" className="text-sm font-medium text-slate-700 hover:text-slate-900 hover:underline">
           &larr; Back to Wardrobe

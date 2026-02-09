@@ -53,7 +53,7 @@ Use imperative commit subjects.
 ## Common user workflows
 1. Sign in with magic link (`/login`).
 2. Browse and filter wardrobe (`/viewer`), open modal or full garment detail.
-3. From garment detail (`/garments/[id]`), use the `Edit` action card to open owner-only edit mode for that specific garment (`/editor?garmentId=<id>`).
+3. From garment detail (`/garments/[id]`), use the `Edit` action card to open owner-only edit mode for that specific garment (`/editor?garmentId=<id>`); after saving changes, the user is redirected back to the same garment detail read-only view and shown a success toast.
 4. Add new garments via `/add-garment` (owner-only), including image upload.
 5. View distribution analytics in `/stats`.
 6. Generate a single AI outfit recommendation via `/ai-look` (owner-only) using free-text prompt input.
