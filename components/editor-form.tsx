@@ -73,6 +73,15 @@ const mergeUniqueStrings = (values: string[]): string[] => {
   return merged.sort((a, b) => a.localeCompare(b));
 };
 
+const resolveCanonicalEnumValue = (value: string | undefined, options: string[] | undefined): string => {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) return '';
+  if (!Array.isArray(options) || options.length === 0) return rawValue;
+
+  const canonical = options.find((option) => option.toLowerCase() === rawValue.toLowerCase());
+  return canonical ?? rawValue;
+};
+
 export default function EditorForm({
   isNewGarmentMode: isNewGarmentModeProp = false,
   initialGarmentId = null,
@@ -260,6 +269,30 @@ export default function EditorForm({
     }
     hasAppliedInitialSelection.current = true;
   }, [initialGarmentId, isNewGarmentMode, wardrobeData]);
+
+  useEffect(() => {
+    if (isNewGarmentMode || !schemaData) return;
+
+    setFormData((prevData) => {
+      if (!prevData) return prevData;
+
+      const styleOptions = schemaData.items.properties?.style?.enum ?? [];
+      const formalityOptions = schemaData.items.properties?.formality?.enum ?? [];
+
+      const canonicalStyle = resolveCanonicalEnumValue(prevData.style, styleOptions);
+      const canonicalFormality = resolveCanonicalEnumValue(prevData.formality, formalityOptions);
+
+      if (canonicalStyle === prevData.style && canonicalFormality === prevData.formality) {
+        return prevData;
+      }
+
+      return {
+        ...prevData,
+        style: canonicalStyle,
+        formality: canonicalFormality,
+      };
+    });
+  }, [isNewGarmentMode, schemaData, formData?.style, formData?.formality]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -546,6 +579,12 @@ export default function EditorForm({
             </>
           );
         } else if (prop.enum) {
+          const enumOptions = [...prop.enum];
+          const currentValue = typeof value === 'string' ? value.trim() : '';
+          if (currentValue && !enumOptions.includes(currentValue)) {
+            enumOptions.unshift(currentValue);
+          }
+
           return (
             <>
               <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
@@ -554,7 +593,7 @@ export default function EditorForm({
                   <SelectValue placeholder={placeholderText} />
                 </SelectTrigger>
                 <SelectContent>
-                  {prop.enum.map((option: string) => (
+                  {enumOptions.map((option: string) => (
                     <SelectItem key={option} value={option}>
                       {option}
                     </SelectItem>

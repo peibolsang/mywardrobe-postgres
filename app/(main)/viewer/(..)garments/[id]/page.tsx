@@ -1,7 +1,6 @@
-
 import { Garment } from "@/lib/types";
 import GarmentModalClient from "@/components/client/garment-modal-client";
-import { neon } from '@neondatabase/serverless';
+import { neon } from "@neondatabase/serverless";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 
@@ -23,17 +22,21 @@ async function getGarment(id: string): Promise<Garment | null> {
   return (garments[0] as Garment) || null;
 }
 
-export default async function GarmentModal({ params: paramsPromise }: { params: Promise<{ id: string }> }) {
+export default async function ViewerGarmentModal({
+  params: paramsPromise,
+}: {
+  params: Promise<{ id: string }>;
+}) {
   const session = await auth();
   if (!session) {
-    redirect('/login');
+    redirect("/login");
   }
 
   const params = await paramsPromise;
   const garment = await getGarment(params.id);
 
   if (!garment) {
-    return null; 
+    return null;
   }
 
   return <GarmentModalClient garment={garment} />;
