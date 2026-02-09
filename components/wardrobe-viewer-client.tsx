@@ -7,8 +7,16 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
-import { FiFilter, FiHeart, FiPlus } from 'react-icons/fi';
+import { FiFilter, FiHeart, FiPlus, FiSearch } from 'react-icons/fi';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from './ui/command';
 import { cn } from '@/lib/utils';
 
 interface Garment {
@@ -81,6 +89,24 @@ const dedupeValues = (values: string[]): string[] => {
 
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+const highlightQuery = (text: string, rawQuery: string) => {
+  const query = rawQuery.trim();
+  if (!query || query.length < 2) return text;
+
+  const regex = new RegExp(`(${escapeRegex(query)})`, 'ig');
+  const parts = text.split(regex);
+
+  return parts.map((part, index) => (
+    part.toLowerCase() === query.toLowerCase() ? (
+      <span key={`${part}-${index}`} className="rounded bg-yellow-200 px-0.5 text-gray-900">
+        {part}
+      </span>
+    ) : (
+      <span key={`${part}-${index}`}>{part}</span>
+    )
+  ));
+};
+
 const emojiMap: { [key: string]: string } = {
   "Sweatshirt": "👕",
   "Shorts": "🩳",
@@ -135,6 +161,9 @@ export default function WardrobeViewerClient({
   const wardrobeData = initialWardrobeData;
   const availableFilters = initialAvailableFilters;
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchValue, setSearchValue] = useState('');
+  const [debouncedSearchValue, setDebouncedSearchValue] = useState('');
   const [selectedFilters, setSelectedFilters] = useState<Filters>(initialSelectedFilters);
   const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(initialShowOnlyFavorites);
   const selectedFiltersRef = useRef<Filters>(initialSelectedFilters);
@@ -196,6 +225,30 @@ export default function WardrobeViewerClient({
     setSelectedFilters(filters);
     setShowOnlyFavorites(favorites);
   }, [searchParams, getFiltersFromUrl]);
+
+  useEffect(() => {
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'k' || (!event.metaKey && !event.ctrlKey)) return;
+
+      const target = event.target as HTMLElement | null;
+      const isTypingTarget = !!target?.closest('input, textarea, select, [contenteditable="true"]');
+      if (isTypingTarget) return;
+
+      event.preventDefault();
+      setIsSearchOpen((prev) => !prev);
+    };
+
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  }, []);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSearchValue(searchValue);
+    }, 120);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [searchValue]);
 
   const toggleFilterDrawer = () => {
     setIsFilterDrawerOpen(!isFilterDrawerOpen);
@@ -274,8 +327,71 @@ export default function WardrobeViewerClient({
     return hasCategoryFilters || showOnlyFavorites;
   }, [selectedFilters, showOnlyFavorites]);
 
+  const searchResults = useMemo(() => {
+    const query = debouncedSearchValue.trim().toLowerCase();
+    if (!query) return wardrobeData;
+    if (query.length < 2) return [];
+
+    return wardrobeData.filter((garment) =>
+      [garment.model, garment.type, garment.brand].some((value) =>
+        value.toLowerCase().includes(query)
+      )
+    );
+  }, [debouncedSearchValue, wardrobeData]);
+
+  const showSearchThresholdHint = searchValue.trim().length > 0 && searchValue.trim().length < 2;
+
+  const handleSelectGarment = (garmentId: number) => {
+    setIsSearchOpen(false);
+    setSearchValue('');
+    window.location.assign(`/garments/${garmentId}`);
+  };
+
   return (
     <div className="min-h-screen bg-gray-100 flex">
+      <CommandDialog
+        open={isSearchOpen}
+        onOpenChange={setIsSearchOpen}
+        title="Search Garments"
+        description="Search garments by model, type, or brand."
+        className="max-w-2xl p-0"
+      >
+        <CommandInput
+          value={searchValue}
+          onValueChange={setSearchValue}
+          placeholder="Search by model, type, or brand..."
+        />
+        <CommandList>
+          {showSearchThresholdHint ? (
+            <p className="py-6 text-center text-sm text-gray-600">Type at least 2 characters</p>
+          ) : (
+            <CommandEmpty>No garments found</CommandEmpty>
+          )}
+          <CommandGroup heading="Garments">
+            {searchResults.map((garment) => (
+              <CommandItem
+                key={garment.id}
+                value={`${garment.model} ${garment.type} ${garment.brand}`}
+                onSelect={() => handleSelectGarment(garment.id)}
+                className="py-2"
+              >
+                <div className="relative h-10 w-10 overflow-hidden rounded-md border bg-gray-100">
+                  <Image
+                    src={garment.file_name || '/placeholder.png'}
+                    alt={`${garment.model} ${garment.type} by ${garment.brand}`}
+                    fill
+                    sizes="40px"
+                    className="object-cover"
+                  />
+                </div>
+                <p className="truncate text-sm text-gray-800">
+                  {highlightQuery(garment.model, debouncedSearchValue)} {highlightQuery(garment.type, debouncedSearchValue)} by {highlightQuery(garment.brand, debouncedSearchValue)}
+                </p>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        </CommandList>
+      </CommandDialog>
       
 
       {/* Side Navigation Bar (Drawer) */}
@@ -328,11 +444,14 @@ export default function WardrobeViewerClient({
       {/* Main Content Area */}
       <div className={cn('flex-1 p-4 flex flex-col items-center transition-all duration-300 ease-in-out', isFilterDrawerOpen ? 'ml-[20%]' : 'ml-0')}>
         {/* Filter Button */}
-        <div className="w-full flex justify-start mb-4 max-w-6xl mx-auto">
+        <div className="w-full flex justify-start gap-2 mb-4 max-w-6xl mx-auto">
+          <Button variant="outline" onClick={() => setIsSearchOpen(true)} aria-label="Search garments (Cmd/Ctrl+K)" title="Search (Cmd/Ctrl+K)">
+            <FiSearch />
+          </Button>
           <Button variant="outline" onClick={toggleFilterDrawer}>
             <FiFilter />
           </Button>
-          <Button variant="outline" onClick={toggleShowOnlyFavorites} className="ml-2">
+          <Button variant="outline" onClick={toggleShowOnlyFavorites}>
             <FiHeart fill={showOnlyFavorites ? 'red' : 'none'} className={cn('transition-colors', showOnlyFavorites ? 'text-red-500' : 'text-gray-500')} />
           </Button>
         </div>
