@@ -8,7 +8,14 @@ import Image from 'next/image';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { FiFilter, FiHeart, FiPlus, FiSearch } from 'react-icons/fi';
+import { CloudSun, Flower2, Leaf, Snowflake, Sun } from 'lucide-react';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
 import {
   CommandDialog,
   CommandEmpty,
@@ -64,6 +71,29 @@ interface WardrobeViewerClientProps {
   initialSelectedFilters: Filters;
   initialShowOnlyFavorites: boolean;
 }
+
+type SeasonFilter = 'winter' | 'summer' | 'fall' | 'spring';
+
+const seasonQuickFilters: Array<{
+  value: SeasonFilter;
+  label: string;
+  Icon: typeof Snowflake;
+}> = [
+  { value: 'winter', label: 'Winter Clothes', Icon: Snowflake },
+  { value: 'summer', label: 'Summer Clothes', Icon: Sun },
+  { value: 'fall', label: 'Fall Clothes', Icon: Leaf },
+  { value: 'spring', label: 'Spring Clothes', Icon: Flower2 },
+];
+
+const seasonWeatherMap: Record<SeasonFilter, string[]> = {
+  winter: ['all season', 'cold', 'cool'],
+  summer: ['all season', 'hot', 'warm'],
+  fall: ['all season', 'cool', 'mild', 'warm'],
+  spring: ['all season', 'cool', 'mild', 'warm'],
+};
+
+const isSeasonFilter = (value: string | null): value is SeasonFilter =>
+  value === 'winter' || value === 'summer' || value === 'fall' || value === 'spring';
 
 const emptyFilters = (): Filters => ({
   brand: [],
@@ -166,8 +196,10 @@ export default function WardrobeViewerClient({
   const [debouncedSearchValue, setDebouncedSearchValue] = useState('');
   const [selectedFilters, setSelectedFilters] = useState<Filters>(initialSelectedFilters);
   const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(initialShowOnlyFavorites);
+  const [selectedSeason, setSelectedSeason] = useState<SeasonFilter | null>(null);
   const selectedFiltersRef = useRef<Filters>(initialSelectedFilters);
   const showOnlyFavoritesRef = useRef<boolean>(initialShowOnlyFavorites);
+  const selectedSeasonRef = useRef<SeasonFilter | null>(null);
 
   const router = useRouter();
   const pathname = usePathname();
@@ -207,7 +239,9 @@ export default function WardrobeViewerClient({
       material: parseFilterValues('material'),
     };
     const favorites = searchParams.get('favorites') === 'true';
-    return { filters, favorites };
+    const rawSeason = searchParams.get('season')?.trim().toLowerCase() ?? null;
+    const season = isSeasonFilter(rawSeason) ? rawSeason : null;
+    return { filters, favorites, season };
   }, [searchParams]);
 
   useEffect(() => {
@@ -219,11 +253,17 @@ export default function WardrobeViewerClient({
   }, [showOnlyFavorites]);
 
   useEffect(() => {
-    const { filters, favorites } = getFiltersFromUrl();
+    selectedSeasonRef.current = selectedSeason;
+  }, [selectedSeason]);
+
+  useEffect(() => {
+    const { filters, favorites, season } = getFiltersFromUrl();
     selectedFiltersRef.current = filters;
     showOnlyFavoritesRef.current = favorites;
+    selectedSeasonRef.current = season;
     setSelectedFilters(filters);
     setShowOnlyFavorites(favorites);
+    setSelectedSeason(season);
   }, [searchParams, getFiltersFromUrl]);
 
   useEffect(() => {
@@ -254,13 +294,16 @@ export default function WardrobeViewerClient({
     setIsFilterDrawerOpen(!isFilterDrawerOpen);
   };
 
-  const updateUrl = useCallback((newFilters: Filters, newFavorites: boolean) => {
+  const updateUrl = useCallback((newFilters: Filters, newFavorites: boolean, newSeason: SeasonFilter | null) => {
     const newSearchParams = new URLSearchParams();
     (Object.entries(newFilters) as Array<[keyof Filters, string[]]>).forEach(([key, values]) => {
       values.forEach((value) => newSearchParams.append(key, value));
     });
     if (newFavorites) {
       newSearchParams.set('favorites', 'true');
+    }
+    if (newSeason) {
+      newSearchParams.set('season', newSeason);
     }
     const query = newSearchParams.toString();
     router.push(query ? `${pathname}?${query}` : pathname);
@@ -270,16 +313,18 @@ export default function WardrobeViewerClient({
     const nextFavorites = !showOnlyFavoritesRef.current;
     showOnlyFavoritesRef.current = nextFavorites;
     setShowOnlyFavorites(nextFavorites);
-    updateUrl(selectedFiltersRef.current, nextFavorites);
+    updateUrl(selectedFiltersRef.current, nextFavorites, selectedSeasonRef.current);
   };
 
   const handleClearFilters = () => {
     const resetFilters = emptyFilters();
     selectedFiltersRef.current = resetFilters;
     showOnlyFavoritesRef.current = false;
+    selectedSeasonRef.current = null;
     setSelectedFilters(resetFilters);
     setShowOnlyFavorites(false);
-    updateUrl(resetFilters, false);
+    setSelectedSeason(null);
+    updateUrl(resetFilters, false, null);
   };
 
   const handleFilterChange = (category: keyof Filters, value: string) => {
@@ -298,7 +343,14 @@ export default function WardrobeViewerClient({
     };
     selectedFiltersRef.current = newFilters;
     setSelectedFilters(newFilters);
-    updateUrl(newFilters, showOnlyFavoritesRef.current);
+    updateUrl(newFilters, showOnlyFavoritesRef.current, selectedSeasonRef.current);
+  };
+
+  const handleSeasonToggle = (season: SeasonFilter) => {
+    const nextSeason = selectedSeasonRef.current === season ? null : season;
+    selectedSeasonRef.current = nextSeason;
+    setSelectedSeason(nextSeason);
+    updateUrl(selectedFiltersRef.current, showOnlyFavoritesRef.current, nextSeason);
   };
 
   const filteredWardrobe = useMemo(() => {
@@ -306,6 +358,15 @@ export default function WardrobeViewerClient({
 
     if (showOnlyFavorites) {
       wardrobe = wardrobe.filter(garment => garment.favorite);
+    }
+
+    if (selectedSeason) {
+      const allowedWeather = new Set(seasonWeatherMap[selectedSeason]);
+      wardrobe = wardrobe.filter((garment) =>
+        (garment.suitable_weather ?? []).some((weather) =>
+          allowedWeather.has(weather.trim().toLowerCase())
+        )
+      );
     }
 
     if (selectedFilters.brand.length === 0 && selectedFilters.type.length === 0 && selectedFilters.color_palette.length === 0 && selectedFilters.style.length === 0 && selectedFilters.material.length === 0) {
@@ -320,12 +381,12 @@ export default function WardrobeViewerClient({
       const matchesMaterial = selectedFilters.material.length === 0 || selectedFilters.material.some(material => garment.material_composition.some(mc => mc.material === material));
       return matchesBrand && matchesType && matchesColor && matchesStyle && matchesMaterial;
     });
-  }, [wardrobeData, selectedFilters, showOnlyFavorites]);
+  }, [wardrobeData, selectedFilters, showOnlyFavorites, selectedSeason]);
 
   const isAnyFilterSelected = useMemo(() => {
     const hasCategoryFilters = Object.values(selectedFilters).some(filterArray => filterArray.length > 0);
-    return hasCategoryFilters || showOnlyFavorites;
-  }, [selectedFilters, showOnlyFavorites]);
+    return hasCategoryFilters || showOnlyFavorites || selectedSeason !== null;
+  }, [selectedFilters, showOnlyFavorites, selectedSeason]);
 
   const searchResults = useMemo(() => {
     const query = debouncedSearchValue.trim().toLowerCase();
@@ -444,7 +505,7 @@ export default function WardrobeViewerClient({
       {/* Main Content Area */}
       <div className={cn('flex-1 p-4 flex flex-col items-center transition-all duration-300 ease-in-out', isFilterDrawerOpen ? 'ml-[20%]' : 'ml-0')}>
         {/* Filter Button */}
-        <div className="w-full flex justify-start gap-2 mb-4 max-w-6xl mx-auto">
+        <div className="w-full flex flex-wrap justify-start gap-2 mb-4 max-w-6xl mx-auto">
           <Button variant="outline" onClick={() => setIsSearchOpen(true)} aria-label="Search garments (Cmd/Ctrl+K)" title="Search (Cmd/Ctrl+K)">
             <FiSearch />
           </Button>
@@ -454,6 +515,35 @@ export default function WardrobeViewerClient({
           <Button variant="outline" onClick={toggleShowOnlyFavorites}>
             <FiHeart fill={showOnlyFavorites ? 'red' : 'none'} className={cn('transition-colors', showOnlyFavorites ? 'text-red-500' : 'text-gray-500')} />
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant={selectedSeason ? 'default' : 'outline'} aria-label="Season filter" title="Season filter">
+                <CloudSun className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-12">
+              {seasonQuickFilters.map((seasonFilter) => (
+                <DropdownMenuItem
+                  key={seasonFilter.value}
+                  onClick={() => handleSeasonToggle(seasonFilter.value)}
+                  className={cn(
+                    'justify-center',
+                    selectedSeason === seasonFilter.value &&
+                      'bg-slate-900 text-white hover:bg-slate-900 focus:bg-slate-900'
+                  )}
+                  aria-label={seasonFilter.label}
+                  title={seasonFilter.label}
+                >
+                  <seasonFilter.Icon
+                    className={cn(
+                      'h-4 w-4',
+                      selectedSeason === seasonFilter.value ? 'text-white' : 'text-muted-foreground'
+                    )}
+                  />
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         
 

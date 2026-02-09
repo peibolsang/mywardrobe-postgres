@@ -53,3 +53,6 @@
 - Routing behavior note: In `/viewer`, command-palette result selection must use hard navigation (`window.location.assign`) when the expected outcome is full garment detail page; soft `router.push` can trigger intercepted modal routes.
 - CMDK performance note: For large local lists in `cmdk`, defer filtering until query length >= 3 and apply a short input debounce (~120ms) to remove perceived keystroke lag.
 - CMDK UX note: Highlighting matched substrings in results (model/type/brand) improves scan speed; implement with regex split + escaped query and style matches with a yellow background.
+- Viewer quick-filter note: Added season quick filters (`winter|summer|fall|spring`) tied to `suitable_weather`, and persisted selection via `season` query param so filter state survives reload/share links.
+- Viewer season quick-filter UX note: Replaced text chips with icon-only buttons (snowflake/sun/leaf/flower) while preserving accessible labels via `aria-label` + `title`.
+- Viewer season control UX note: Consolidated season quick filters into a single dropdown trigger, showing vertically stacked season icons in a shadcn `DropdownMenu` to reduce toolbar clutter.
