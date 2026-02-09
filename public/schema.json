@@ -26,8 +26,8 @@
       },
       "formality": {
         "type": "string",
-        "description": "The level of formality of the garment (e.g., 'Formal', 'Business Formal', 'Business Casual', 'Elevated Causal', 'Casual', 'Technical').",
-        "enum": ["Formal", "Business Formal", "Business Casual", "Elevated Causal", "Casual", "Technical"]
+        "description": "The level of formality of the garment (e.g., 'Formal', 'Business Formal', 'Business Casual', 'Elevated Casual', 'Casual', 'Technical').",
+        "enum": ["Formal", "Business Formal", "Business Casual", "Elevated Casual", "Casual", "Technical"]
       },
       "material_composition": {
         "type": "array",

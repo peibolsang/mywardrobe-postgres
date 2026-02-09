@@ -291,7 +291,7 @@ export default function GarmentDetailsClient({
               <CardContent className="pt-0">
                 <div className="flex flex-col gap-2">
                   <Button asChild className="w-full">
-                    <Link href={`/editor?garmentId=${garment.id}`}>Edit</Link>
+                    <Link href={`/editor?garmentId=${garment.id}`} prefetch={false}>Edit</Link>
                   </Button>
                 </div>
               </CardContent>

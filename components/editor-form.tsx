@@ -116,6 +116,7 @@ export default function EditorForm({
   const [isPending, startTransition] = useTransition();
   const [isUploading, setIsUploading] = useState(false);
   const hasAppliedInitialSelection = useRef(false);
+  const hasReconciledFreshData = useRef(false);
 
   // useActionState for form submission feedback
   const [createState, createFormAction] = useActionState(createGarment, { message: '', status: '' });
@@ -269,6 +270,25 @@ export default function EditorForm({
     }
     hasAppliedInitialSelection.current = true;
   }, [initialGarmentId, isNewGarmentMode, wardrobeData]);
+
+  useEffect(() => {
+    if (isNewGarmentMode || !initialGarmentId || hasReconciledFreshData.current) return;
+
+    hasReconciledFreshData.current = true;
+    (async () => {
+      try {
+        const latestWardrobe = await fetchFreshWardrobe();
+        setWardrobeData(latestWardrobe);
+
+        const selectedIndex = latestWardrobe.findIndex((garment) => garment.id === initialGarmentId);
+        if (selectedIndex >= 0) {
+          setCurrentIndex(selectedIndex);
+        }
+      } catch (error) {
+        console.error('Failed to reconcile fresh editor data:', error);
+      }
+    })();
+  }, [fetchFreshWardrobe, initialGarmentId, isNewGarmentMode]);
 
   useEffect(() => {
     if (isNewGarmentMode || !schemaData) return;

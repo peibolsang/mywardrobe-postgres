@@ -6,7 +6,7 @@ VALUES
   ('Formal'),
   ('Business Formal'),
   ('Business Casual'),
-  ('Elevated Causal'),
+  ('Elevated Casual'),
   ('Casual'),
   ('Technical')
 ON CONFLICT (name) DO NOTHING;
@@ -44,7 +44,7 @@ WHERE g.formality_id = r.old_id
 WITH canonical AS (
   SELECT id, name
   FROM formalities
-  WHERE name IN ('Formal', 'Business Formal', 'Business Casual', 'Elevated Causal', 'Casual', 'Technical')
+  WHERE name IN ('Formal', 'Business Formal', 'Business Casual', 'Elevated Casual', 'Casual', 'Technical')
 ),
 variants AS (
   SELECT
@@ -62,7 +62,7 @@ WHERE g.formality_id = v.variant_id;
 
 -- 4) Delete unreferenced non-canonical rows from formalities.
 DELETE FROM formalities f
-WHERE f.name NOT IN ('Formal', 'Business Formal', 'Business Casual', 'Elevated Causal', 'Casual', 'Technical')
+WHERE f.name NOT IN ('Formal', 'Business Formal', 'Business Casual', 'Elevated Casual', 'Casual', 'Technical')
   AND NOT EXISTS (
     SELECT 1
     FROM garments g
@@ -77,7 +77,7 @@ BEGIN
   SELECT COUNT(*) INTO invalid_count
   FROM garments g
   JOIN formalities f ON f.id = g.formality_id
-  WHERE f.name NOT IN ('Formal', 'Business Formal', 'Business Casual', 'Elevated Causal', 'Casual', 'Technical');
+  WHERE f.name NOT IN ('Formal', 'Business Formal', 'Business Casual', 'Elevated Casual', 'Casual', 'Technical');
 
   IF invalid_count > 0 THEN
     RAISE EXCEPTION
