@@ -22,12 +22,12 @@
       "style": {
         "type": "string",
         "description": "The aesthetic style of the garment (e.g., 'casual', 'formal', 'sporty', 'vintage', 'bohemian').",
-        "enum": ["casual", "sporty", "minimalist", "preppy", "mod", "workwear", "outdoorsy", "vintage", "smart casual", "western", "classic"]
+        "enum": ["sporty", "minimalist", "preppy", "mod", "workwear", "outdoorsy", "vintage", "western", "classic"]
       },
       "formality": {
         "type": "string",
-        "description": "The level of formality of the garment (e.g., 'informal', 'business casual', 'semi-formal', 'formal').",
-        "enum": ["informal", "business casual", "semi-formal", "formal"]
+        "description": "The level of formality of the garment (e.g., 'Formal', 'Business Formal', 'Business Casual', 'Elevated Causal', 'Casual', 'Technical').",
+        "enum": ["Formal", "Business Formal", "Business Casual", "Elevated Causal", "Casual", "Technical"]
       },
       "material_composition": {
         "type": "array",
