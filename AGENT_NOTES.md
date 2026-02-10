@@ -56,3 +56,35 @@
 - Viewer quick-filter note: Added season quick filters (`winter|summer|fall|spring`) tied to `suitable_weather`, and persisted selection via `season` query param so filter state survives reload/share links.
 - Viewer season quick-filter UX note: Replaced text chips with icon-only buttons (snowflake/sun/leaf/flower) while preserving accessible labels via `aria-label` + `title`.
 - Viewer season control UX note: Consolidated season quick filters into a single dropdown trigger, showing vertically stacked season icons in a shadcn `DropdownMenu` to reduce toolbar clutter.
+- AI travel planner note: Added `/ai-look` "Pack for Travel" mode with structured inputs (`destination`, `startDate`, `endDate`, `reason`), per-day weather enrichment (forecast + seasonal fallback), day-by-day look generation, strict no-repeat for first 4 days, and partial-plan return via `skippedDays`.
+- Travel packing rule note: Updated travel planner constraints so first-4-day no-repeat excludes bottoms and footwear, footwear is capped to one pair across the trip, and day 1 + final day are explicitly generated as airport/commute-appropriate looks.
+- Travel weather fallback note: When exact API forecast is unavailable for requested dates, planner now queries the LLM for destination/month average climate conditions and uses that for day-level weather intent before falling back to deterministic seasonal inference.
+- Travel strictness note: Added hard place/occasion gating per day in travel planning (pre-filter eligible wardrobe + post-validate final lineup), so transit days require airport/commute tags and stay days follow strict reason-specific tags (office/business or vacation city/active with conditional beach).
+- AI pipeline consistency note: Updated travel mode to match single-look architecture by adding a per-day Step 1 intent-interpretation pass (canonical structured intent) before Step 2 recommendation generation.
+- Travel robustness note: For one-footwear-across-trip constraints, add deterministic post-processing to normalize model output (collapse multi-footwear selections to a single locked pair) before deciding to skip a day.
+- Travel rule refinement: Footwear-lock now applies to stay days only (commute days exempt), and all garments used on travel days are reserved from reuse on in-between stay days.
+- Travel constraint update: Removed the first-4-day no-repeat rule entirely; travel planning now allows repeats as needed while keeping strict place/occasion, commute-reserve, and footwear constraints.
+- Travel office-mapping note: Expanded Office strict constraints to include additional acceptable places (`Workshop`, `Creative Studio / Atelier`, `Metropolitan / City`) and occasion (`Casual Social`) while retaining office/business options.
+- Travel transit-day reliability note: Enforced strict eligible-ID pool filtering before validation and added last-travel-day fallback to reuse day-1 transit lineup (when still eligible) to avoid unnecessary skips under identical transit constraints.
+
+## 2026-02-09
+- Context: Travel pack agent was repeating looks across days and occasionally returning incomplete outfits without top-bottom-footwear coverage.
+- What went right: Added deterministic post-generation normalization (core silhouette enforcement + top-to-bottom ordering + anti-duplicate/overlap checks) so model variance no longer directly leaks into output quality.
+- What went wrong: Existing travel fallback intentionally reused day-1 lineup on final travel day, which reintroduced repeats even when alternatives existed.
+- Correction applied: Removed final-day forced reuse behavior and replaced it with diversity-aware retries plus strict duplicate rejection when fresh pool depth is sufficient.
+- Optimization note: Large eligible wardrobes were causing prompt bloat and repeated high-salience picks; fixed by scoring and capping a travel-day candidate subset (category quotas + novelty weighting) before model generation.
+- Reliability note: Single-look mode now also applies deterministic silhouette completion and validation so responses consistently include top + bottom + footwear when wardrobe data permits it.
+- Travel-pack completeness note: Updated travel mode to require four garment categories per day (`outerwear` + `top` + `bottom` + `footwear`), with explicit prompt rule, schema minimum of 4 IDs, and deterministic server-side enforcement/validation.
+- Office baseline update note: Travel Office mode now favors styles `minimalist`/`vintage`/`classic`, formality `Elevated Casual` (fallback `Business Casual`), and occasions `Casual Social`/`Date Night / Intimate Dinner`/`Outdoor Social / Garden Party`; strict Office-day occasion gating was aligned to the same set so the preference is enforceable in eligibility filtering.
+- Stats UI clarity note: In Coverage and Gaps, truncating each section to 6 rows caused confusion against full coverage totals (for example 9/9 while showing only 6). Updated UI to render all options in each section.
+- AI Look tab UX note: Replaced the mode toggle-like control with semantic tabs rendered outside the main card (`role=tablist`/`tab`), and removed redundant main-card title/subtitle to reduce visual noise.
+- Travel packing constraint note: Added a hard single-outerwear rule for travel mode (one jacket/coat across departure, stay, and return days), including trip-wide preselection of an outerwear candidate that satisfies each day’s place/occasion/weather constraints plus deterministic per-day lock validation.
+- Travel rule interaction fix: commute-day reservation previously blocked the locked trip outerwear on stay days, causing false one-outerwear failures; fixed by exempting the locked outerwear from transit reservation blocking and from transit-reserved insertion.
+- Travel loading UX note: Added full-structure skeletons for `/ai-look` travel mode that render one day-card placeholder per requested travel day while plan generation is pending, reducing layout shift when results hydrate.
+- AI tab state UX note: Scoped result rendering by active mode so travel output/skeletons only show in `Pack for Travel` and single-look output only shows in `AI Look`, preventing cross-tab visual leakage.
+- AI single-look guardrail note: Enforced fixed four-piece output (`outerwear + top + bottom + footwear`) with deterministic category-based normalization to prevent invalid category duplication (for example two pants) in `/ai-look` single mode.
+- AI single-load UX note: Added screenshot-matching loading skeletons for `AI Look` results (title bar, intent-details strip, 4 lineup tiles, rationale lines) and clear previous results at request start to reduce layout shift.
+
+## 2026-02-10
+- Security hardening note: `/api/ai-look` now enforces a server-side maximum travel span (21 days) before any expensive per-day generation path runs, preventing single-request cost amplification.
+- Rate-limit hardening note: Replaced owner API limiting from in-memory/IP-keyed only to owner-scoped persistent DB-backed windows (minute + hour) to resist multi-instance bypass; keep an in-memory fallback path only for DB limiter outages to avoid feature downtime.

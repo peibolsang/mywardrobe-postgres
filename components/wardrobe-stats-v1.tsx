@@ -215,7 +215,7 @@ export default function WardrobeStatsV1({
                     </p>
                   </div>
                   <div className="space-y-2">
-                    {section.options.slice(0, 6).map((option) => (
+                    {section.options.map((option) => (
                       <div key={`${section.label}-${option.name}`} className="space-y-1">
                         <div className="flex items-center justify-between text-sm">
                           <span className="truncate pr-2">{option.name}</span>

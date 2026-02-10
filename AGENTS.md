@@ -56,7 +56,7 @@ Use imperative commit subjects.
 3. From garment detail (`/garments/[id]`), use the `Edit` action card to open owner-only edit mode for that specific garment (`/editor?garmentId=<id>`); after saving changes, the user is redirected back to the same garment detail read-only view and shown a success toast.
 4. Add new garments via `/add-garment` (owner-only), including image upload.
 5. View distribution analytics in `/stats`.
-6. Generate a single AI outfit recommendation via `/ai-look` (owner-only) using free-text prompt input.
+6. Generate AI recommendations via `/ai-look` (owner-only): either a single free-text look or a multi-day "Pack for Travel" plan (destination + date range + reason).
 7. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
 
 ## Rendering strategy
@@ -64,16 +64,19 @@ Use imperative commit subjects.
 2. Client components (`components/client/*` and interactive feature components) manage filters, dialogs, local form state, toasts, and URL state.
 3. Server actions (`actions/garment.ts`) own write operations, authorization checks, redirects, and cache invalidation.
 4. Editor pages (`/editor`, `/add-garment`) preload wardrobe/schema/editor-options server-side and render `EditorForm` inside `Suspense` with a layout-matching skeleton fallback to avoid empty-state flash and layout shift.
-5. AI look page (`/ai-look`) is route-guarded server-side and renders a client recommender UI that calls an owner-protected API route (`/api/ai-look`) using Vercel AI SDK + OpenAI.
-6. `/api/ai-look` uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) look generation constrained to wardrobe IDs, plus deterministic match scoring blended with model confidence.
-7. AI look generation optionally enriches free-text prompts with live weather context (location extracted from user text -> geocoded -> weather summary) before recommendation.
+5. AI look page (`/ai-look`) is route-guarded server-side and renders a client UI with two tabs: (a) free-text single-look generation and (b) "Pack for Travel" planning.
+6. `/api/ai-look` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
+7. Single-look mode uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) look generation constrained to wardrobe IDs, plus deterministic match scoring blended with model confidence.
+8. Travel mode geocodes destination and enriches each trip day with forecast weather when available; if exact day forecast is unavailable, it falls back to LLM-estimated monthly climate for the destination, then to deterministic seasonal inference only if the LLM fallback fails.
+9. Travel generation follows a two-step pattern per day: (a) interpret structured day context into canonical intent, then (b) generate one wardrobe-only look using a scored candidate subset of eligible garments (category quotas + novelty weighting) plus strict day constraints.
 
-## AI Look Agent (2-Step Summary)
-1. Step 1 (Interpretation): `/api/ai-look` maps free-text user input into canonical wardrobe intent (`weather`, `occasion`, `place`, `timeOfDay`, `formality`, `style`) using structured output.
-2. Step 1 tool-calling: During interpretation, the model can invoke `getWeatherByLocation` (AI SDK tool) to fetch live weather from OpenWeather for location-aware prompts.
-3. Step 2 (Recommendation): The model receives the interpreted canonical intent + wardrobe JSON and returns exactly one wardrobe-only look (`selectedGarmentIds` ordered top-to-bottom, rationale, model confidence).
-4. Server-side validation and scoring: Returned IDs are validated against DB garments, rationale is sanitized (no IDs), and final confidence blends model confidence with deterministic match scoring.
-5. UI exposure: `/ai-look` displays look title, lineup, rationale, and an optional details accordion (confidence breakdown, interpreted intent, and live weather status when available).
+## AI Look Agent (Mode Summary)
+1. Single-look interpretation: `/api/ai-look` maps free-text input into canonical wardrobe intent (`weather`, `occasion`, `place`, `timeOfDay`, `formality`, `style`) via structured output; the model can tool-call `getWeatherByLocation` for live weather context.
+2. Single-look recommendation: The model returns one wardrobe-only lineup (`selectedGarmentIds` ordered top-to-bottom), validated against DB IDs and then deterministically normalized to enforce exactly four pieces (`outerwear + top + bottom + footwear`) before confidence calibration.
+3. Travel planning (`mode: "travel"`): Inputs are `destination`, `startDate`, `endDate`, and `reason` (`Vacation`, `Office`, `Customer visit`).
+4. Travel weather enrichment: Each day in range attempts OpenWeather forecast; if unavailable, fallback uses LLM monthly climate estimation for the destination/month (average temperatures + likely conditions), with deterministic month/hemisphere fallback only if LLM climate estimation fails.
+5. Travel recommendation: One look is generated per day with strict completeness (outerwear/jacket-or-coat + top + bottom + footwear), exactly one outerwear piece for the entire trip (departure, stay days, and return), max one footwear pair across stay days (commute days exempt), commute-day garment reservation (travel-day garments cannot be reused on in-between stay days, except the locked single outerwear which must be reused trip-wide), hard per-day place/occasion constraints (travel days require airport/commute tags; office stay days require office-compatible places plus `Casual Social`/`Date Night / Intimate Dinner`/`Outdoor Social / Garden Party` occasions; customer-visit days require office/business tags; vacation days require city/active tags with beach enabled only when destination signals beach and weather is warm), anti-repeat controls (recent-look history prompt + deterministic duplicate/overlap rejection + lineup diversification), and a server-side max travel span of 21 days to cap AI/tool amplification. Days that cannot be satisfied are returned in `skippedDays` instead of failing the full response.
+6. UI exposure: `/ai-look` shows both tabbed modes, with travel output rendered as per-day cards and skipped-day diagnostics.
 
 ## Authorization strategy
 - `EDITOR_OWNER_EMAIL` is the single source of truth for editor authorization.
@@ -95,7 +98,7 @@ Use imperative commit subjects.
   - short cooldown between repeated requests per identifier
   - max request count per rolling time window
 - `AUTH_EMAIL_FROM` can be used to configure sender address; fallback is `onboarding@resend.dev`.
-- AI recommendation API hardening (`/api/ai-look`) includes same-origin POST validation and in-memory per-window request throttling to reduce abuse risk and OpenAI cost exposure.
+- AI recommendation API hardening (`/api/ai-look`) includes same-origin POST validation and owner-scoped persistent DB-backed rate limiting (minute + hour windows) with in-memory fallback only if the DB limiter is unavailable, to reduce abuse risk and OpenAI cost exposure.
 
 ## Caching strategy: 
 - Shared wardrobe reads are centralized in `lib/wardrobe.ts` via `getWardrobeData()`.
