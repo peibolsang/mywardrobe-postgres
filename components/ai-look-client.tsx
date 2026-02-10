@@ -229,7 +229,7 @@ export default function AiLookClient() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 p-4 md:p-6">
+    <div className="min-h-[calc(100vh-4rem)] min-h-[calc(100dvh-4rem)] bg-slate-100 p-4 md:p-6">
       <div className="mx-auto w-full max-w-6xl space-y-6">
         <div className="border-b border-slate-300">
           <div role="tablist" aria-label="AI look modes" className="flex items-end gap-6">

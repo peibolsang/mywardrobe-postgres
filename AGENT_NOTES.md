@@ -88,3 +88,4 @@
 ## 2026-02-10
 - Security hardening note: `/api/ai-look` now enforces a server-side maximum travel span (21 days) before any expensive per-day generation path runs, preventing single-request cost amplification.
 - Rate-limit hardening note: Replaced owner API limiting from in-memory/IP-keyed only to owner-scoped persistent DB-backed windows (minute + hour) to resist multi-instance bypass; keep an in-memory fallback path only for DB limiter outages to avoid feature downtime.
+- UI overflow note: `AI Look` page had baseline vertical scroll due to `min-h-screen` under a sticky `h-16` top nav; fixed by switching container min-height to `calc(100vh - 4rem)`/`calc(100dvh - 4rem)` so idle tab no longer overflows.
