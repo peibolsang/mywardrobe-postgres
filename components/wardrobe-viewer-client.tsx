@@ -5,10 +5,11 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
+import { Command as CommandPrimitive } from 'cmdk';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { FiFilter, FiHeart, FiPlus, FiSearch } from 'react-icons/fi';
-import { CloudSun, Flower2, Leaf, Snowflake, Sun } from 'lucide-react';
+import { ArrowLeft, CloudSun, Copy, Flower2, Leaf, Search, Snowflake, Sun } from 'lucide-react';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
 import {
   DropdownMenu,
@@ -20,7 +21,6 @@ import {
   CommandDialog,
   CommandEmpty,
   CommandGroup,
-  CommandInput,
   CommandItem,
   CommandList,
 } from './ui/command';
@@ -73,6 +73,7 @@ interface WardrobeViewerClientProps {
 }
 
 type SeasonFilter = 'winter' | 'summer' | 'fall' | 'spring';
+type PaletteView = 'search' | 'export-json';
 
 const seasonQuickFilters: Array<{
   value: SeasonFilter;
@@ -194,6 +195,8 @@ export default function WardrobeViewerClient({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const [debouncedSearchValue, setDebouncedSearchValue] = useState('');
+  const [paletteView, setPaletteView] = useState<PaletteView>('search');
+  const [isJsonCopied, setIsJsonCopied] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState<Filters>(initialSelectedFilters);
   const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(initialShowOnlyFavorites);
   const [selectedSeason, setSelectedSeason] = useState<SeasonFilter | null>(null);
@@ -281,6 +284,31 @@ export default function WardrobeViewerClient({
     window.addEventListener('keydown', handleKeydown);
     return () => window.removeEventListener('keydown', handleKeydown);
   }, []);
+
+  useEffect(() => {
+    if (!isSearchOpen) return;
+
+    const handlePaletteShortcut = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      // Export shortcut is uppercase "J" only.
+      if (event.key !== 'J') return;
+      if (searchValue.trim().length > 0) return;
+
+      event.preventDefault();
+      setPaletteView('export-json');
+    };
+
+    window.addEventListener('keydown', handlePaletteShortcut);
+    return () => window.removeEventListener('keydown', handlePaletteShortcut);
+  }, [isSearchOpen, searchValue]);
+
+  useEffect(() => {
+    if (!isJsonCopied) return;
+    const timeoutId = window.setTimeout(() => {
+      setIsJsonCopied(false);
+    }, 1400);
+    return () => window.clearTimeout(timeoutId);
+  }, [isJsonCopied]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -401,6 +429,10 @@ export default function WardrobeViewerClient({
   }, [debouncedSearchValue, wardrobeData]);
 
   const showSearchThresholdHint = searchValue.trim().length > 0 && searchValue.trim().length < 2;
+  const wardrobeExportJson = useMemo(
+    () => JSON.stringify(wardrobeData, null, 2),
+    [wardrobeData]
+  );
 
   const handleSelectGarment = (garmentId: number) => {
     setIsSearchOpen(false);
@@ -408,50 +440,155 @@ export default function WardrobeViewerClient({
     window.location.assign(`/garments/${garmentId}`);
   };
 
+  const handleExportWardrobeJson = () => {
+    setPaletteView('export-json');
+    setSearchValue('');
+    setIsJsonCopied(false);
+  };
+
+  const handleBackToSearch = () => {
+    setPaletteView('search');
+    setSearchValue('');
+    setIsJsonCopied(false);
+  };
+
+  const handleCopyWardrobeJson = async () => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(wardrobeExportJson);
+      } else if (typeof document !== 'undefined') {
+        const tempArea = document.createElement('textarea');
+        tempArea.value = wardrobeExportJson;
+        tempArea.setAttribute('readonly', 'true');
+        tempArea.style.position = 'absolute';
+        tempArea.style.left = '-9999px';
+        document.body.appendChild(tempArea);
+        tempArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempArea);
+      }
+      setIsJsonCopied(true);
+    } catch (error) {
+      console.error('Failed to copy wardrobe JSON:', error);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-100 flex">
       <CommandDialog
         open={isSearchOpen}
-        onOpenChange={setIsSearchOpen}
+        onOpenChange={(open) => {
+          setIsSearchOpen(open);
+          if (!open) {
+            setSearchValue('');
+            setPaletteView('search');
+            setIsJsonCopied(false);
+          }
+        }}
         title="Search Garments"
         description="Search garments by model, type, or brand."
         className="max-w-2xl p-0"
       >
-        <CommandInput
-          value={searchValue}
-          onValueChange={setSearchValue}
-          placeholder="Search by model, type, or brand..."
-        />
-        <CommandList>
-          {showSearchThresholdHint ? (
-            <p className="py-6 text-center text-sm text-gray-600">Type at least 2 characters</p>
-          ) : (
-            <CommandEmpty>No garments found</CommandEmpty>
+        <div
+          data-slot="command-input-wrapper"
+          className="flex h-12 items-center gap-2 border-b px-3"
+        >
+          {paletteView === 'export-json' && (
+            <button
+              type="button"
+              onClick={handleBackToSearch}
+              className="inline-flex size-7 items-center justify-center rounded-md text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+              aria-label="Back to command search"
+              title="Back"
+            >
+              <ArrowLeft className="size-4" />
+            </button>
           )}
-          <CommandGroup heading="Garments">
-            {searchResults.map((garment) => (
+          {paletteView === 'export-json' ? (
+            <span className="text-sm font-medium text-gray-600">Back to search</span>
+          ) : (
+            <>
+              <Search className="size-4 shrink-0 opacity-50" />
+              <CommandPrimitive.Input
+                data-slot="command-input"
+                className="placeholder:text-muted-foreground flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-hidden disabled:cursor-not-allowed disabled:opacity-50"
+                value={searchValue}
+                onValueChange={setSearchValue}
+                placeholder="Search by model, type, or brand..."
+              />
+            </>
+          )}
+        </div>
+        {paletteView === 'search' ? (
+          <CommandList>
+            {showSearchThresholdHint ? (
+              <p className="py-6 text-center text-sm text-gray-600">Type at least 2 characters</p>
+            ) : (
+              <CommandEmpty>No garments found</CommandEmpty>
+            )}
+            <CommandGroup heading="Actions">
               <CommandItem
-                key={garment.id}
-                value={`${garment.model} ${garment.type} ${garment.brand}`}
-                onSelect={() => handleSelectGarment(garment.id)}
+                value="Export Wardrobe as JSON"
+                onSelect={handleExportWardrobeJson}
                 className="py-2"
               >
-                <div className="relative h-10 w-10 overflow-hidden rounded-md border bg-gray-100">
-                  <Image
-                    src={garment.file_name || '/placeholder.png'}
-                    alt={`${garment.model} ${garment.type} by ${garment.brand}`}
-                    fill
-                    sizes="40px"
-                    className="object-cover"
-                  />
+                <div className="flex w-full items-center justify-between gap-3">
+                  <span className="truncate text-sm text-gray-800">Export Wardrobe as JSON</span>
+                  <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                    J
+                  </span>
                 </div>
-                <p className="truncate text-sm text-gray-800">
-                  {highlightQuery(garment.model, debouncedSearchValue)} {highlightQuery(garment.type, debouncedSearchValue)} by {highlightQuery(garment.brand, debouncedSearchValue)}
-                </p>
               </CommandItem>
-            ))}
-          </CommandGroup>
-        </CommandList>
+            </CommandGroup>
+            <CommandGroup heading="Garments">
+              {searchResults.map((garment) => (
+                <CommandItem
+                  key={garment.id}
+                  value={`${garment.model} ${garment.type} ${garment.brand}`}
+                  onSelect={() => handleSelectGarment(garment.id)}
+                  className="py-2"
+                >
+                  <div className="relative h-10 w-10 overflow-hidden rounded-md border bg-gray-100">
+                    <Image
+                      src={garment.file_name || '/placeholder.png'}
+                      alt={`${garment.model} ${garment.type} by ${garment.brand}`}
+                      fill
+                      sizes="40px"
+                      className="object-cover"
+                    />
+                  </div>
+                  <p className="truncate text-sm text-gray-800">
+                    {highlightQuery(garment.model, debouncedSearchValue)} {highlightQuery(garment.type, debouncedSearchValue)} by {highlightQuery(garment.brand, debouncedSearchValue)}
+                  </p>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        ) : (
+          <div className="h-[300px] bg-gray-50 p-3">
+            <div className="flex h-full flex-col">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-gray-600">Wardrobe JSON</p>
+                <button
+                  type="button"
+                  onClick={handleCopyWardrobeJson}
+                  className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                  aria-label="Copy wardrobe JSON to clipboard"
+                  title="Copy"
+                >
+                  <Copy className="size-3.5" />
+                  {isJsonCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <textarea
+                readOnly
+                value={wardrobeExportJson}
+                className="min-h-0 w-full flex-1 resize-y rounded-md border border-gray-300 bg-white p-2 font-mono text-xs text-gray-800"
+                aria-label="Wardrobe JSON export"
+              />
+            </div>
+          </div>
+        )}
       </CommandDialog>
       
 
