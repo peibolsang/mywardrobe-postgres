@@ -74,7 +74,7 @@
         "type": "array",
         "items": {
           "type": "string",
-          "enum": ["Metropolitan / City", "Creative Studio / Atelier", "Hospitality (Indoor)", "Coastal / Beach", "Countryside / Estate", "Wilderness", "Workshop", "Transit Hub / Airport", "Office / Boardroom"]
+          "enum": ["Metropolitan / City", "Creative Studio / Atelier", "Home / WFH", "Coastal / Beach", "Countryside / Estate", "Wilderness", "Workshop", "Transit Hub / Airport", "Office / Boardroom"]
         },
         "description": "An array of places or environments where the garment would be appropriate (e.g., 'work from home', 'office', 'church', 'restaurant', 'park', 'gym', 'beach', 'city', 'countryside')."
       },

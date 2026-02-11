@@ -73,9 +73,11 @@ Use imperative commit subjects.
 ## AI Look Agent (Mode Summary)
 1. Single-look interpretation: `/api/ai-look` maps free-text input into canonical wardrobe intent (`weather`, `occasion`, `place`, `timeOfDay`, `formality`, `style`) via structured output; the model can tool-call `getWeatherByLocation` for live weather context.
 2. Single-look recommendation: The model returns one wardrobe-only lineup (`selectedGarmentIds` ordered top-to-bottom), validated against DB IDs and then deterministically normalized to enforce exactly four pieces (`outerwear + top + bottom + footwear`) before confidence calibration.
+   - Final single-look rationale text is generated server-side from the normalized lineup + canonical intent/weather context so rationale cannot reference garments outside the returned lineup.
 3. Travel planning (`mode: "travel"`): Inputs are `destination`, `startDate`, `endDate`, and `reason` (`Vacation`, `Office`, `Customer visit`).
 4. Travel weather enrichment: Each day in range attempts OpenWeather forecast; if unavailable, fallback uses LLM monthly climate estimation for the destination/month (average temperatures + likely conditions), with deterministic month/hemisphere fallback only if LLM climate estimation fails.
 5. Travel recommendation: One look is generated per day with strict completeness (outerwear/jacket-or-coat + top + bottom + footwear), exactly one outerwear piece for the entire trip (departure, stay days, and return), max one footwear pair across stay days (commute days exempt), commute-day garment reservation (travel-day garments cannot be reused on in-between stay days, except the locked single outerwear which must be reused trip-wide), hard per-day place/occasion constraints (travel days require airport/commute tags; office stay days require office-compatible places plus `Casual Social`/`Date Night / Intimate Dinner`/`Outdoor Social / Garden Party` occasions; customer-visit days require office/business tags; vacation days require city/active tags with beach enabled only when destination signals beach and weather is warm), anti-repeat controls (recent-look history prompt + deterministic duplicate/overlap rejection + lineup diversification), and a server-side max travel span of 21 days to cap AI/tool amplification. Days that cannot be satisfied are returned in `skippedDays` instead of failing the full response.
+   - Travel day rationale text is also generated server-side from each finalized day lineup + interpreted day intent/weather, preventing post-normalization rationale drift.
 6. UI exposure: `/ai-look` shows both tabbed modes, with travel output rendered as per-day cards and skipped-day diagnostics.
 
 ## Authorization strategy
@@ -138,6 +140,7 @@ Use imperative commit subjects.
 - Source of truth for selectable vocabularies:
   - DB-driven: `type`, `material`, `color` (lookup tables + editor options API + user-creatable upsert flow).
   - Schema-driven (`public/schema.json` enums): `suitable_places`, `suitable_occasions`, `suitable_weather`, `suitable_time_of_day`, `style`, `formality`.
+  - Current place label for home context is `Home / WFH` (replacing legacy `Hospitality (Indoor)`).
 
 ## Database Entity-Relationship Model
 

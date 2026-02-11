@@ -98,3 +98,8 @@
 ## 2026-02-11
 - Stats caching correction note: `/stats` previously consumed production `unstable_cache` data and could remain stale indefinitely when DB changes occurred outside server actions; fixed by forcing fresh reads in stats (`getWardrobeData({ forceFresh: true })`) and marking the route dynamic.
 - Cache resilience note: Added a 5-minute TTL (`revalidate: 300`) to shared `getWardrobeData()` production cache so viewer/API consumers self-heal from out-of-band DB updates even without explicit `revalidateTag`.
+- AI rationale consistency note: `/api/ai-look` previously returned model-authored rationale generated before lineup normalization, causing garment-name drift versus final `lineup`; fixed by generating rationale server-side from finalized lineup + canonical intent/weather context for both single and travel modes.
+- AI debugging note: Added explicit server log for single-look Step 1 interpreter output (`[ai-look][single][step-1][interpreted-intent]`) to inspect raw LLM intent JSON before recommendation generation.
+- AI debugging refinement note: Added companion server log for normalized canonical intent (`[ai-look][single][step-1][canonical-intent]`) so raw-vs-canonical mapping can be compared in one request.
+- AI tuning note: Increased single-look Step 1 interpreter temperature from `0` to `0.8` to allow more varied intent inference while keeping schema/canonical guardrails.
+- Taxonomy label update note: Replaced place enum label `Hospitality (Indoor)` with `Home / WFH` in `public/schema.json` and added SQL migration script `scripts/sql/rename-hospitality-indoor-to-home-wfh.sql` to remap `suitable_places` rows and junction-table references safely.

@@ -181,12 +181,92 @@ const WEATHER_TOOL_INPUT_SCHEMA = z.object({
 
 const normalize = (value: unknown): string => String(value ?? "").trim();
 
-const sanitizeRationale = (raw: string): string =>
-  raw
-    .replace(/\(\s*database\s*id\s*:\s*\d+\s*\)/gi, "")
-    .replace(/\b(database\s*id|id)\s*[:#]?\s*\d+\b/gi, "")
-    .replace(/\s{2,}/g, " ")
+const joinNaturalList = (values: string[]): string => {
+  if (values.length === 0) return "";
+  if (values.length === 1) return values[0];
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
+};
+
+const toCompactSentence = (value: string, maxLength: number): string => {
+  const compact = normalize(value).replace(/\s+/g, " ");
+  if (!compact) return "";
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+};
+
+const summarizeMaterials = (materials: Garment["material_composition"]): string | null => {
+  const entries = (materials ?? [])
+    .map((entry) => ({
+      material: normalize(entry.material),
+      percentage: Number(entry.percentage ?? 0),
+    }))
+    .filter((entry) => entry.material.length > 0 && entry.percentage > 0)
+    .sort((left, right) => right.percentage - left.percentage)
+    .slice(0, 2);
+
+  if (entries.length === 0) return null;
+  return entries.map((entry) => `${entry.material} ${Math.round(entry.percentage)}%`).join(", ");
+};
+
+const buildAlignedRationale = ({
+  lineupGarments,
+  intent,
+  weatherContext,
+  contextLabel,
+}: {
+  lineupGarments: Garment[];
+  intent: CanonicalIntent;
+  weatherContext?: string | null;
+  contextLabel?: string;
+}): string => {
+  const contextParts: string[] = [];
+  const places = intent.place.slice(0, 3);
+  const occasions = intent.occasion.slice(0, 3);
+  const weatherTags = intent.weather.slice(0, 2);
+  const timeTags = intent.timeOfDay.slice(0, 2);
+  const styleTags = intent.style.slice(0, 2);
+
+  if (normalize(contextLabel)) contextParts.push(normalize(contextLabel));
+  if (places.length > 0) contextParts.push(`places like ${joinNaturalList(places)}`);
+  if (occasions.length > 0) contextParts.push(`occasions like ${joinNaturalList(occasions)}`);
+  if (weatherTags.length > 0) contextParts.push(`${joinNaturalList(weatherTags)} weather`);
+  if (timeTags.length > 0) contextParts.push(`${joinNaturalList(timeTags)} timing`);
+  if (intent.formality) contextParts.push(`${intent.formality} formality`);
+  if (styleTags.length > 0) contextParts.push(`${joinNaturalList(styleTags)} style cues`);
+
+  const openingSentence = contextParts.length > 0
+    ? `This look is tuned for ${contextParts.join(", ")}.`
+    : "This look is tuned to your request.";
+
+  const lineupSentence = lineupGarments.length > 0
+    ? `Final lineup: ${lineupGarments.map((garment) => {
+        const label = [normalize(garment.brand), normalize(garment.model)].filter(Boolean).join(" ").trim() || normalize(garment.type) || "garment";
+        const details: string[] = [];
+        const typeText = normalize(garment.type);
+        if (typeText) details.push(typeText);
+        const materials = summarizeMaterials(garment.material_composition);
+        if (materials) details.push(materials);
+        const featureSnippet = toCompactSentence(garment.features, 90);
+        if (featureSnippet) details.push(featureSnippet);
+        return details.length > 0 ? `${label} (${details.join("; ")})` : label;
+      }).join("; ")}.`
+    : "";
+
+  const normalizedWeatherContext = normalize(weatherContext);
+  const weatherSentence = normalizedWeatherContext
+    ? `Weather considered: ${toCompactSentence(normalizedWeatherContext, 180)}`
+    : "";
+
+  const notesSentence = normalize(intent.notes)
+    ? `Intent focus: ${toCompactSentence(intent.notes, 180)}`
+    : "";
+
+  return [openingSentence, weatherSentence, lineupSentence, notesSentence]
+    .filter(Boolean)
+    .join(" ")
     .trim();
+};
 
 const inferDayReferenceFromPrompt = (prompt: string): "today" | "tomorrow" | "unspecified" => {
   const lower = prompt.toLowerCase();
@@ -1975,7 +2055,12 @@ export async function POST(request: Request) {
           date: dayWeather.date,
           lookName: generatedDay.lookName,
           lineup,
-          rationale: sanitizeRationale(generatedDay.rationale),
+          rationale: buildAlignedRationale({
+            lineupGarments,
+            intent: dayIntent,
+            weatherContext: dayWeather.summary,
+            contextLabel: `travel day in ${weatherByDate.locationLabel}`,
+          }),
           confidence,
           modelConfidence,
           matchScore,
@@ -2028,10 +2113,11 @@ export async function POST(request: Request) {
         }),
       },
       stopWhen: stepCountIs(6),
-      temperature: 0,
+      temperature: 0.8,
       system: INTERPRETER_APPENDIX,
       prompt: `Canonical options:\n${JSON.stringify(canonicalOptions)}\n\nUser request:\n${userPrompt}`,
     });
+    console.info("[ai-look][single][step-1][interpreted-intent]", JSON.stringify(interpreted));
 
     const latestWeatherToolResult = [...toolResults]
       .reverse()
@@ -2109,6 +2195,7 @@ export async function POST(request: Request) {
       style: toCanonicalValues(interpreted.style, STYLE_OPTIONS),
       notes: normalize(interpreted.notes),
     };
+    console.info("[ai-look][single][step-1][canonical-intent]", JSON.stringify(canonicalIntent));
 
     const { object } = await generateObject({
       model: openai("gpt-4.1-mini"),
@@ -2182,7 +2269,11 @@ export async function POST(request: Request) {
     return NextResponse.json({
       lookName: object.lookName,
       lineup,
-      rationale: sanitizeRationale(object.rationale),
+      rationale: buildAlignedRationale({
+        lineupGarments,
+        intent: canonicalIntent,
+        weatherContext: weatherContextSummary || null,
+      }),
       confidence,
       modelConfidence,
       matchScore,
