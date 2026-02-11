@@ -82,6 +82,32 @@ async function getGarment(id: string): Promise<Garment | null> {
   return garment;
 }
 
+async function getAdjacentGarmentIds(id: number): Promise<{ previousGarmentId: number | null; nextGarmentId: number | null }> {
+  const result = await sql`
+    SELECT
+      (
+        SELECT g_prev.id
+        FROM garments g_prev
+        WHERE g_prev.id < ${id}
+        ORDER BY g_prev.id DESC
+        LIMIT 1
+      ) AS previous_id,
+      (
+        SELECT g_next.id
+        FROM garments g_next
+        WHERE g_next.id > ${id}
+        ORDER BY g_next.id ASC
+        LIMIT 1
+      ) AS next_id
+  `;
+
+  const row = result[0] as { previous_id?: number | null; next_id?: number | null } | undefined;
+  return {
+    previousGarmentId: typeof row?.previous_id === "number" ? row.previous_id : null,
+    nextGarmentId: typeof row?.next_id === "number" ? row.next_id : null,
+  };
+}
+
 async function getSchema() {
   const schemaPath = path.join(process.cwd(), 'public', 'schema.json');
   const schemaFile = await fs.readFile(schemaPath, 'utf-8');
@@ -107,5 +133,18 @@ export default async function GarmentPage({ params: paramsPromise }: { params: P
     return <div className="flex justify-center items-center min-h-screen">Garment not found.</div>;
   }
 
-  return <GarmentDetailsClient garment={garment} schema={schema} canEdit={canEdit} />;
+  const garmentId = Number(params.id);
+  const { previousGarmentId, nextGarmentId } = Number.isInteger(garmentId)
+    ? await getAdjacentGarmentIds(garmentId)
+    : { previousGarmentId: null, nextGarmentId: null };
+
+  return (
+    <GarmentDetailsClient
+      garment={garment}
+      schema={schema}
+      canEdit={canEdit}
+      previousGarmentId={previousGarmentId}
+      nextGarmentId={nextGarmentId}
+    />
+  );
 }

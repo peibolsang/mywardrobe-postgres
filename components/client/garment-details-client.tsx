@@ -4,6 +4,7 @@ import { FiHeart } from 'react-icons/fi';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { ArrowLeft, ArrowRight, Code2, Copy, Link2, Pencil, Search, Sparkles } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
@@ -59,15 +60,21 @@ export default function GarmentDetailsClient({
   garment,
   schema,
   canEdit = false,
+  previousGarmentId = null,
+  nextGarmentId = null,
 }: {
   garment: Garment;
   schema: Schema;
   canEdit?: boolean;
+  previousGarmentId?: number | null;
+  nextGarmentId?: number | null;
 }) {
   const [isImageOpen, setIsImageOpen] = useState(false);
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [actionsSearchValue, setActionsSearchValue] = useState('');
   const [actionsDebouncedSearchValue, setActionsDebouncedSearchValue] = useState('');
+  const [actionsView, setActionsView] = useState<'search' | 'export-json'>('search');
+  const [isGarmentJsonCopied, setIsGarmentJsonCopied] = useState(false);
   const hasShownUpdateToastRef = useRef(false);
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -95,21 +102,131 @@ export default function GarmentDetailsClient({
     return () => window.clearTimeout(timeoutId);
   }, [actionsSearchValue]);
 
+  useEffect(() => {
+    if (!isGarmentJsonCopied) return;
+    const timeoutId = window.setTimeout(() => {
+      setIsGarmentJsonCopied(false);
+    }, 1400);
+    return () => window.clearTimeout(timeoutId);
+  }, [isGarmentJsonCopied]);
+
   const handleGenerateAnchoredLook = () => {
     setIsActionsOpen(false);
     setActionsSearchValue('');
+    setActionsView('search');
     router.push(`/ai-look?anchorGarmentId=${garment.id}&anchorMode=strict`);
   };
 
   const handleEditFromCommand = () => {
     setIsActionsOpen(false);
     setActionsSearchValue('');
+    setActionsView('search');
     router.push(`/editor?garmentId=${garment.id}`);
   };
 
-  useEffect(() => {
-    if (!canEdit) return;
+  const closeActionsAndNavigate = (url: string) => {
+    setIsActionsOpen(false);
+    setActionsSearchValue('');
+    setActionsView('search');
+    router.push(url);
+  };
 
+  const handleOpenNextGarment = () => {
+    if (!nextGarmentId) {
+      toast.info('No next garment available.');
+      return;
+    }
+    closeActionsAndNavigate(`/garments/${nextGarmentId}`);
+  };
+
+  const handleOpenPreviousGarment = () => {
+    if (!previousGarmentId) {
+      toast.info('No previous garment available.');
+      return;
+    }
+    closeActionsAndNavigate(`/garments/${previousGarmentId}`);
+  };
+
+  const handleFindMatchingPieces = () => {
+    const params = new URLSearchParams();
+    const trimmedStyle = garment.style?.trim();
+    if (trimmedStyle) {
+      params.append('style', trimmedStyle);
+    }
+    const topMaterial = [...(garment.material_composition ?? [])]
+      .sort((a, b) => b.percentage - a.percentage)[0]?.material?.trim();
+    if (topMaterial) {
+      params.append('material', topMaterial);
+    }
+    const query = params.toString();
+    closeActionsAndNavigate(query ? `/viewer?${query}` : '/viewer');
+  };
+
+  const handleOpenGarmentJson = () => {
+    setActionsView('export-json');
+    setActionsSearchValue('');
+    setIsGarmentJsonCopied(false);
+  };
+
+  const handleBackToActionSearch = () => {
+    setActionsView('search');
+    setActionsSearchValue('');
+    setIsGarmentJsonCopied(false);
+  };
+
+  const handleCopyGarmentJson = async () => {
+    const garmentJson = JSON.stringify(garment, null, 2);
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(garmentJson);
+      } else if (typeof document !== 'undefined') {
+        const tempArea = document.createElement('textarea');
+        tempArea.value = garmentJson;
+        tempArea.setAttribute('readonly', 'true');
+        tempArea.style.position = 'absolute';
+        tempArea.style.left = '-9999px';
+        document.body.appendChild(tempArea);
+        tempArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempArea);
+      }
+      setIsGarmentJsonCopied(true);
+    } catch (error) {
+      console.error('Failed to copy garment JSON:', error);
+      toast.error('Failed to copy garment JSON.');
+    }
+  };
+
+  const handleCopyGarmentLink = async () => {
+    const garmentLink = typeof window !== 'undefined'
+      ? `${window.location.origin}/garments/${garment.id}`
+      : `/garments/${garment.id}`;
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(garmentLink);
+      } else if (typeof document !== 'undefined') {
+        const tempArea = document.createElement('textarea');
+        tempArea.value = garmentLink;
+        tempArea.setAttribute('readonly', 'true');
+        tempArea.style.position = 'absolute';
+        tempArea.style.left = '-9999px';
+        document.body.appendChild(tempArea);
+        tempArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempArea);
+      }
+      toast.success('Garment link copied.');
+      setIsActionsOpen(false);
+      setActionsSearchValue('');
+      setActionsView('search');
+    } catch (error) {
+      console.error('Failed to copy garment link:', error);
+      toast.error('Failed to copy garment link.');
+    }
+  };
+
+  useEffect(() => {
     const handleKeydown = (event: KeyboardEvent) => {
       if (event.key.toLowerCase() !== 'k' || (!event.metaKey && !event.ctrlKey)) return;
       const target = event.target as HTMLElement | null;
@@ -122,29 +239,55 @@ export default function GarmentDetailsClient({
 
     window.addEventListener('keydown', handleKeydown);
     return () => window.removeEventListener('keydown', handleKeydown);
-  }, [canEdit]);
+  }, []);
 
   useEffect(() => {
-    if (!canEdit || !isActionsOpen) return;
+    if (!isActionsOpen) return;
 
     const handleActionHotkeys = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (actionsSearchValue.trim().length > 0) return;
+      if (actionsView !== 'search') return;
 
-      if (event.key === 'E') {
+      if (canEdit && event.key === 'E') {
         event.preventDefault();
         handleEditFromCommand();
         return;
       }
-      if (event.key === 'G') {
+      if (canEdit && event.key === 'G') {
         event.preventDefault();
         handleGenerateAnchoredLook();
+        return;
+      }
+      if (event.key === 'J') {
+        event.preventDefault();
+        handleOpenGarmentJson();
+        return;
+      }
+      if (event.key === 'L') {
+        event.preventDefault();
+        void handleCopyGarmentLink();
+        return;
+      }
+      if (event.key === 'N') {
+        event.preventDefault();
+        handleOpenNextGarment();
+        return;
+      }
+      if (event.key === 'P') {
+        event.preventDefault();
+        handleOpenPreviousGarment();
+        return;
+      }
+      if (event.key === 'M') {
+        event.preventDefault();
+        handleFindMatchingPieces();
       }
     };
 
     window.addEventListener('keydown', handleActionHotkeys);
     return () => window.removeEventListener('keydown', handleActionHotkeys);
-  }, [actionsSearchValue, canEdit, isActionsOpen]);
+  }, [actionsSearchValue, actionsView, canEdit, isActionsOpen]);
 
   const joinOrFallback = (values: string[] | undefined, fallback: string) =>
     Array.isArray(values) && values.length > 0 ? values.join(', ') : fallback;
@@ -157,6 +300,7 @@ export default function GarmentDetailsClient({
     : 'grid gap-4';
   const actionQuery = actionsDebouncedSearchValue.trim().toLowerCase();
   const showActionThresholdHint = actionsSearchValue.trim().length > 0 && actionsSearchValue.trim().length < 2;
+  const garmentJson = JSON.stringify(garment, null, 2);
 
   const actionMatches = (searchTarget: string): boolean => {
     if (!actionQuery) return true;
@@ -164,73 +308,221 @@ export default function GarmentDetailsClient({
     return searchTarget.toLowerCase().includes(actionQuery);
   };
 
-  const showGenerateAction = actionMatches('generate look around this garment anchor ai');
-  const showEditAction = actionMatches('edit this garment editor update');
-  const showNoActionsFound = !showActionThresholdHint && !showGenerateAction && !showEditAction;
+  const showGenerateLookAction = canEdit && actionMatches('generate look around this garment anchor ai');
+  const showEditAction = canEdit && actionMatches('edit this garment editor update');
+  const showGarmentJsonAction = actionMatches('generate garment json export json');
+  const showCopyLinkAction = actionMatches('copy garment link share url');
+  const showNextGarmentAction = actionMatches('open next garment');
+  const showPreviousGarmentAction = actionMatches('open previous garment');
+  const showFindMatchingPiecesAction = actionMatches('find matching pieces similar viewer style material');
+  const showNoActionsFound =
+    !showActionThresholdHint &&
+    !showGenerateLookAction &&
+    !showEditAction &&
+    !showGarmentJsonAction &&
+    !showCopyLinkAction &&
+    !showNextGarmentAction &&
+    !showPreviousGarmentAction &&
+    !showFindMatchingPiecesAction;
 
   return (
     <div className="box-border min-h-[calc(100dvh-65px)] bg-slate-100 p-4 md:p-6">
       <Toaster />
-      {canEdit && (
-        <CommandDialog
-          open={isActionsOpen}
-          onOpenChange={(open) => {
-            setIsActionsOpen(open);
-            if (!open) {
-              setActionsSearchValue('');
-            }
-          }}
-          title="Garment Actions"
-          description="Run actions for this garment."
-          className="max-w-md"
-        >
-          <CommandInput
-            placeholder="Search actions... (E = Edit, G = Generate)"
-            value={actionsSearchValue}
-            onValueChange={setActionsSearchValue}
-          />
-          <CommandList>
-            {showActionThresholdHint ? (
-              <p className="py-6 text-center text-sm text-gray-600">Type at least 2 characters</p>
-            ) : (
-              <CommandEmpty>No actions found</CommandEmpty>
-            )}
-            {showGenerateAction && (
-              <CommandGroup heading="AI Look">
-                <CommandItem
-                  value="Generate Look Around This Garment"
-                  keywords={["generate", "look", "around", "garment", "anchor", "ai"]}
-                  onSelect={handleGenerateAnchoredLook}
+      <CommandDialog
+        open={isActionsOpen}
+        onOpenChange={(open) => {
+          setIsActionsOpen(open);
+          if (!open) {
+            setActionsSearchValue('');
+            setActionsView('search');
+            setIsGarmentJsonCopied(false);
+          }
+        }}
+        title="Garment Actions"
+        description="Run actions for this garment."
+        className="max-w-md"
+      >
+        {actionsView === 'search' ? (
+          <>
+            <CommandInput
+              placeholder="Search actions... (E = Edit, G = Generate)"
+              value={actionsSearchValue}
+              onValueChange={setActionsSearchValue}
+            />
+            <CommandList>
+              {showActionThresholdHint ? (
+                <p className="py-6 text-center text-sm text-gray-600">Type at least 2 characters</p>
+              ) : (
+                <CommandEmpty>No actions found</CommandEmpty>
+              )}
+              {(showGenerateLookAction || showEditAction || showGarmentJsonAction || showCopyLinkAction || showNextGarmentAction || showPreviousGarmentAction || showFindMatchingPiecesAction) && (
+                <CommandGroup heading="Actions">
+                  {showGenerateLookAction && (
+                  <CommandItem
+                    value="Generate Look Around This Garment"
+                    keywords={["generate", "look", "around", "garment", "anchor", "ai"]}
+                    onSelect={handleGenerateAnchoredLook}
+                  >
+                    <div className="flex w-full items-center justify-between gap-3">
+                      <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                        <Sparkles className="size-4 shrink-0 text-gray-500" />
+                        <span className="truncate">Generate Look Around This Garment</span>
+                      </span>
+                      <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                        G
+                      </span>
+                    </div>
+                  </CommandItem>
+                  )}
+
+                  {showEditAction && (
+                  <CommandItem
+                    value="Edit This Garment"
+                    keywords={["edit", "garment", "editor", "update"]}
+                    onSelect={handleEditFromCommand}
+                  >
+                    <div className="flex w-full items-center justify-between gap-3">
+                      <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                        <Pencil className="size-4 shrink-0 text-gray-500" />
+                        <span className="truncate">Edit This Garment</span>
+                      </span>
+                      <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                        E
+                      </span>
+                    </div>
+                  </CommandItem>
+                  )}
+
+                  {showGarmentJsonAction && (
+                    <CommandItem
+                      value="Generate Garment JSON"
+                      keywords={["generate", "garment", "json", "export"]}
+                      onSelect={handleOpenGarmentJson}
+                    >
+                      <div className="flex w-full items-center justify-between gap-3">
+                        <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                          <Code2 className="size-4 shrink-0 text-gray-500" />
+                          <span className="truncate">Generate Garment JSON</span>
+                        </span>
+                        <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                          J
+                        </span>
+                      </div>
+                    </CommandItem>
+                  )}
+
+                  {showCopyLinkAction && (
+                    <CommandItem
+                      value="Copy Garment Link"
+                      keywords={["copy", "garment", "link", "url", "share"]}
+                      onSelect={handleCopyGarmentLink}
+                    >
+                      <div className="flex w-full items-center justify-between gap-3">
+                        <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                          <Link2 className="size-4 shrink-0 text-gray-500" />
+                          <span className="truncate">Copy Garment Link</span>
+                        </span>
+                        <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                          L
+                        </span>
+                      </div>
+                    </CommandItem>
+                  )}
+
+                  {showNextGarmentAction && (
+                    <CommandItem
+                      value="Open Next Garment"
+                      keywords={["open", "next", "garment"]}
+                      onSelect={handleOpenNextGarment}
+                    >
+                      <div className="flex w-full items-center justify-between gap-3">
+                        <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                          <ArrowRight className="size-4 shrink-0 text-gray-500" />
+                          <span className="truncate">Open Next Garment</span>
+                        </span>
+                        <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                          N
+                        </span>
+                      </div>
+                    </CommandItem>
+                  )}
+
+                  {showPreviousGarmentAction && (
+                    <CommandItem
+                      value="Open Previous Garment"
+                      keywords={["open", "previous", "garment"]}
+                      onSelect={handleOpenPreviousGarment}
+                    >
+                      <div className="flex w-full items-center justify-between gap-3">
+                        <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                          <ArrowLeft className="size-4 shrink-0 text-gray-500" />
+                          <span className="truncate">Open Previous Garment</span>
+                        </span>
+                        <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                          P
+                        </span>
+                      </div>
+                    </CommandItem>
+                  )}
+
+                  {showFindMatchingPiecesAction && (
+                    <CommandItem
+                      value="Find Matching Pieces"
+                      keywords={["find", "matching", "pieces", "viewer", "style", "material"]}
+                      onSelect={handleFindMatchingPieces}
+                    >
+                      <div className="flex w-full items-center justify-between gap-3">
+                        <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                          <Search className="size-4 shrink-0 text-gray-500" />
+                          <span className="truncate">Find Matching Pieces</span>
+                        </span>
+                        <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                          M
+                        </span>
+                      </div>
+                    </CommandItem>
+                  )}
+                </CommandGroup>
+              )}
+
+              {showNoActionsFound && null}
+            </CommandList>
+          </>
+        ) : (
+          <div className="h-[300px] bg-gray-50 p-3">
+            <div className="flex h-full flex-col">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={handleBackToActionSearch}
+                  className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                  aria-label="Back to action search"
+                  title="Back"
                 >
-                  <div className="flex w-full items-center justify-between gap-3">
-                    <span className="truncate text-sm text-gray-800">Generate Look Around This Garment</span>
-                    <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
-                      G
-                    </span>
-                  </div>
-                </CommandItem>
-              </CommandGroup>
-            )}
-            {showEditAction && (
-              <CommandGroup heading="Garment">
-                <CommandItem
-                  value="Edit This Garment"
-                  keywords={["edit", "garment", "editor", "update"]}
-                  onSelect={handleEditFromCommand}
+                  <ArrowLeft className="size-3.5" />
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyGarmentJson}
+                  className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                  aria-label="Copy garment JSON to clipboard"
+                  title="Copy"
                 >
-                  <div className="flex w-full items-center justify-between gap-3">
-                    <span className="truncate text-sm text-gray-800">Edit This Garment</span>
-                    <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
-                      E
-                    </span>
-                  </div>
-                </CommandItem>
-              </CommandGroup>
-            )}
-            {showNoActionsFound && null}
-          </CommandList>
-        </CommandDialog>
-      )}
+                  <Copy className="size-3.5" />
+                  {isGarmentJsonCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <textarea
+                readOnly
+                value={garmentJson}
+                className="min-h-0 w-full flex-1 resize-y rounded-md border border-gray-300 bg-white p-2 font-mono text-xs text-gray-800"
+                aria-label="Garment JSON export"
+              />
+            </div>
+          </div>
+        )}
+      </CommandDialog>
       <div className="mx-auto mb-4 w-full max-w-[1700px]">
         <Link href="/viewer" className="text-sm font-medium text-slate-700 hover:text-slate-900 hover:underline">
           &larr; Back to Wardrobe
@@ -428,25 +720,25 @@ export default function GarmentDetailsClient({
             </Card>
           </div>
 
-          {canEdit && (
-            <Card className="lg:self-start">
-              <CardContent className="pt-0">
-                <div className="flex flex-col gap-2">
+          <Card className="lg:self-start">
+            <CardContent className="pt-0">
+              <div className="flex flex-col gap-2">
+                {canEdit && (
                   <Button asChild className="w-full">
                     <Link href={`/editor?garmentId=${garment.id}`} prefetch={false}>Edit</Link>
                   </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full"
-                    onClick={() => setIsActionsOpen(true)}
-                  >
-                    Actions (Cmd/Ctrl+K)
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )}
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setIsActionsOpen(true)}
+                >
+                  Actions (Cmd/Ctrl+K)
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>

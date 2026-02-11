@@ -9,7 +9,7 @@ import { Command as CommandPrimitive } from 'cmdk';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { FiFilter, FiHeart, FiPlus, FiSearch } from 'react-icons/fi';
-import { ArrowLeft, CloudSun, Copy, Flower2, Leaf, Search, Snowflake, Sun } from 'lucide-react';
+import { ArrowLeft, CloudSun, Code2, Copy, Flower2, Leaf, Search, Snowflake, Sun } from 'lucide-react';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
 import {
   DropdownMenu,
@@ -533,7 +533,10 @@ export default function WardrobeViewerClient({
                 className="py-2"
               >
                 <div className="flex w-full items-center justify-between gap-3">
-                  <span className="truncate text-sm text-gray-800">Export Wardrobe as JSON</span>
+                  <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                    <Code2 className="size-4 shrink-0 text-gray-500" />
+                    <span className="truncate">Export Wardrobe as JSON</span>
+                  </span>
                   <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
                     J
                   </span>
