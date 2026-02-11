@@ -57,6 +57,7 @@ Use imperative commit subjects.
 4. Add new garments via `/add-garment` (owner-only), including image upload.
 5. View distribution analytics in `/stats`.
 6. Generate AI recommendations via `/ai-look` (owner-only): either a single free-text look or a multi-day "Pack for Travel" plan (destination + date range + reason).
+   - From garment details (owner view), `Cmd/Ctrl+K` opens garment actions including `Generate look around this garment`, which routes to `/ai-look?anchorGarmentId=<id>&anchorMode=strict`.
 7. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
 
 ## Rendering strategy
@@ -74,6 +75,7 @@ Use imperative commit subjects.
 1. Single-look interpretation: `/api/ai-look` maps free-text input into canonical wardrobe intent (`weather`, `occasion`, `place`, `timeOfDay`, `formality`, `style`) via structured output; the model can tool-call `getWeatherByLocation` for live weather context.
    - Single-look weather is resolved as current conditions for the indicated place; prompt date parsing is intentionally not used in single-look mode.
 2. Single-look recommendation: Step 2 attempts up to six candidates and degrades gracefully when fewer valid candidates are returned. Candidates are wardrobe-ID-only, validated against DB IDs, normalized to exactly four pieces (`outerwear + top + bottom + footwear`), deduplicated by signature, and reranked with objective fit + model confidence + recency/overlap controls.
+   - Single mode optionally accepts `anchorGarmentId` + `anchorMode` (`strict` or `soft`) to generate a look around a specific garment. Strict mode requires the anchor in the final lineup and returns 422 if impossible.
    - Final output returns exactly one look in single mode (`primaryLook`).
    - Single mode stores recent lineup signatures in DB table `ai_look_lineup_history`, applies hard no-repeat/no-high-overlap filtering when alternatives exist, and falls back to repeated signatures only when no viable alternative survives.
    - `ai_look_lineup_history` is provisioned via explicit SQL migration script `scripts/sql/create-ai-look-lineup-history.sql` (no runtime auto-create).

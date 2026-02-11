@@ -14,6 +14,8 @@ import schema from "@/public/schema.json";
 
 const singleLookRequestSchema = z.object({
   prompt: z.string().trim().min(1, "Prompt is required."),
+  anchorGarmentId: z.coerce.number().int().positive().optional(),
+  anchorMode: z.enum(["strict", "soft"]).optional(),
 });
 
 const travelRequestSchema = z.object({
@@ -116,6 +118,8 @@ interface StrictDayConstraints {
   requiredOccasions: string[];
   label: string;
 }
+
+type AnchorMode = "strict" | "soft";
 
 interface CompactGarment {
   id: number;
@@ -1109,6 +1113,8 @@ const normalizeToFixedCategoryLook = ({
   intent,
   requiredCategories,
   recentUsedIds,
+  anchorGarmentId,
+  anchorMode,
   preferProvidedIds = true,
 }: {
   ids: number[];
@@ -1117,9 +1123,17 @@ const normalizeToFixedCategoryLook = ({
   intent: CanonicalIntent;
   requiredCategories: GarmentCategory[];
   recentUsedIds?: Set<number>;
+  anchorGarmentId?: number | null;
+  anchorMode?: AnchorMode;
   preferProvidedIds?: boolean;
 }): number[] => {
   const poolById = new Map(pool.map((garment) => [garment.id, garment]));
+  const normalizedAnchorMode: AnchorMode = anchorMode ?? "strict";
+  const anchorCategory = anchorGarmentId != null ? garmentCategoryById.get(anchorGarmentId) ?? "other" : null;
+  const anchoredRequiredCategory =
+    anchorCategory && requiredCategories.includes(anchorCategory) ? anchorCategory : null;
+  const strictAnchorRequired =
+    normalizedAnchorMode === "strict" && anchorGarmentId != null && anchoredRequiredCategory != null;
   let normalized = toTopDownOrderedIds(ids, garmentCategoryById);
   normalized = enforceCoreSilhouetteFromPool({
     ids: normalized,
@@ -1138,6 +1152,18 @@ const normalizeToFixedCategoryLook = ({
   const selected: number[] = [];
 
   for (const category of requiredCategories) {
+    if (
+      strictAnchorRequired &&
+      category === anchoredRequiredCategory &&
+      anchorGarmentId != null &&
+      poolById.has(anchorGarmentId) &&
+      !used.has(anchorGarmentId)
+    ) {
+      selected.push(anchorGarmentId);
+      used.add(anchorGarmentId);
+      continue;
+    }
+
     const currentCategoryIds = normalized.filter((id) => garmentCategoryById.get(id) === category && !used.has(id));
     const currentCategoryIdSet = new Set(currentCategoryIds);
     const fallbackIds = pool
@@ -1149,10 +1175,21 @@ const normalizeToFixedCategoryLook = ({
         if (!garment) return null;
         const isProvided = currentCategoryIdSet.has(id);
         const providedBonus = preferProvidedIds && isProvided ? 18 : 0;
+        const anchorBonus =
+          anchorGarmentId != null &&
+          anchoredRequiredCategory === category &&
+          id === anchorGarmentId
+            ? (normalizedAnchorMode === "strict" ? 240 : 28)
+            : 0;
         const noveltyBonus = recentUsedIds
           ? (recentUsedIds.has(id) ? -14 : 8)
           : 0;
-        const score = scoreGarmentForIntent(garment, intent) + (garment.favorite ? 4 : 0) + providedBonus + noveltyBonus;
+        const score =
+          scoreGarmentForIntent(garment, intent) +
+          (garment.favorite ? 4 : 0) +
+          providedBonus +
+          anchorBonus +
+          noveltyBonus;
         return { id, score };
       })
       .filter((item): item is { id: number; score: number } => Boolean(item))
@@ -1162,6 +1199,10 @@ const normalizeToFixedCategoryLook = ({
     const chosen = candidates[0].id;
     selected.push(chosen);
     used.add(chosen);
+  }
+
+  if (strictAnchorRequired && anchorGarmentId != null && !selected.includes(anchorGarmentId)) {
+    return [];
   }
 
   return toTopDownOrderedIds(selected, garmentCategoryById);
@@ -1246,6 +1287,8 @@ const toValidatedSingleLookCandidate = ({
   intent,
   weatherContext,
   recentUsedIds,
+  anchorGarmentId,
+  anchorMode,
   compactWardrobe,
   garmentById,
   garmentCategoryById,
@@ -1256,6 +1299,8 @@ const toValidatedSingleLookCandidate = ({
   intent: CanonicalIntent;
   weatherContext?: string | null;
   recentUsedIds?: Set<number>;
+  anchorGarmentId?: number | null;
+  anchorMode?: AnchorMode;
   compactWardrobe: CompactGarment[];
   garmentById: Map<number, Garment>;
   garmentCategoryById: Map<number, GarmentCategory>;
@@ -1270,9 +1315,14 @@ const toValidatedSingleLookCandidate = ({
     intent,
     requiredCategories: SINGLE_REQUIRED_CATEGORIES,
     recentUsedIds,
+    anchorGarmentId,
+    anchorMode,
     preferProvidedIds: true,
   });
   if (!hasCoreSilhouetteFromIds(normalizedIds, garmentCategoryById, SINGLE_REQUIRED_CATEGORIES)) {
+    return null;
+  }
+  if (anchorMode === "strict" && anchorGarmentId != null && !normalizedIds.includes(anchorGarmentId)) {
     return null;
   }
 
@@ -1309,6 +1359,8 @@ const buildDeterministicSingleLookFallbackCandidate = ({
   weatherContext,
   recentUsedIds,
   avoidSignatures,
+  anchorGarmentId,
+  anchorMode,
   compactWardrobe,
   garmentById,
   garmentCategoryById,
@@ -1317,6 +1369,8 @@ const buildDeterministicSingleLookFallbackCandidate = ({
   weatherContext?: string | null;
   recentUsedIds?: Set<number>;
   avoidSignatures?: Set<string>;
+  anchorGarmentId?: number | null;
+  anchorMode?: AnchorMode;
   compactWardrobe: CompactGarment[];
   garmentById: Map<number, Garment>;
   garmentCategoryById: Map<number, GarmentCategory>;
@@ -1349,6 +1403,8 @@ const buildDeterministicSingleLookFallbackCandidate = ({
     intent,
     weatherContext,
     recentUsedIds,
+    anchorGarmentId,
+    anchorMode,
     compactWardrobe,
     garmentById,
     garmentCategoryById,
@@ -2708,6 +2764,8 @@ export async function POST(request: Request) {
     }
 
     const userPrompt = parsedSingleBody.data.prompt;
+    const requestedAnchorGarmentId = parsedSingleBody.data.anchorGarmentId ?? null;
+    const requestedAnchorMode: AnchorMode = parsedSingleBody.data.anchorMode ?? "strict";
 
     const { output: interpreted, toolResults } = await generateText({
       model: openai("gpt-4.1-mini"),
@@ -2838,6 +2896,43 @@ export async function POST(request: Request) {
     const garmentCategoryById = new Map(
       wardrobeData.map((garment) => [garment.id, categorizeType(garment.type)])
     );
+    let effectiveAnchorGarmentId: number | null = requestedAnchorGarmentId;
+    let effectiveAnchorMode: AnchorMode = requestedAnchorMode;
+    let effectiveAnchorCategory: GarmentCategory | null = null;
+    if (requestedAnchorGarmentId != null) {
+      const anchorGarment = garmentById.get(requestedAnchorGarmentId);
+      if (!anchorGarment) {
+        return NextResponse.json(
+          { error: `Anchored garment ${requestedAnchorGarmentId} was not found in your wardrobe.` },
+          { status: 422 }
+        );
+      }
+      const anchorCategory = garmentCategoryById.get(requestedAnchorGarmentId) ?? "other";
+      const isAnchorCompatible = SINGLE_REQUIRED_CATEGORIES.includes(anchorCategory);
+      if (!isAnchorCompatible && requestedAnchorMode === "strict") {
+        return NextResponse.json(
+          { error: `Strict anchor is not compatible with fixed look silhouette. Garment category: ${anchorCategory}.` },
+          { status: 422 }
+        );
+      }
+      if (!isAnchorCompatible && requestedAnchorMode === "soft") {
+        effectiveAnchorGarmentId = null;
+      } else {
+        effectiveAnchorCategory = anchorCategory;
+      }
+    } else {
+      effectiveAnchorMode = "soft";
+    }
+    console.info(
+      "[ai-look][single][anchor][request]",
+      JSON.stringify({
+        requestedAnchorGarmentId,
+        requestedAnchorMode,
+        effectiveAnchorGarmentId,
+        effectiveAnchorMode,
+        effectiveAnchorCategory,
+      })
+    );
     const missingSingleCategories = missingCoreSilhouetteCategoriesFromWardrobe(
       compactWardrobe,
       SINGLE_REQUIRED_CATEGORIES
@@ -2885,6 +2980,11 @@ export async function POST(request: Request) {
             recentUsedIds.size > 0
               ? `SOFT NOVELTY RULE: Minimize garment reuse from these recently used IDs when alternatives exist: ${JSON.stringify(Array.from(recentUsedIds).slice(0, 40))}`
               : "No recent garment IDs to avoid.",
+            effectiveAnchorGarmentId != null
+              ? effectiveAnchorMode === "strict"
+                ? `STRICT ANCHOR RULE: Every candidate must include garment ID ${effectiveAnchorGarmentId}.`
+                : `SOFT ANCHOR RULE: Prefer including garment ID ${effectiveAnchorGarmentId} when possible.`
+              : "No anchor garment requested.",
             seenSignatures.size > 0
               ? `Do not repeat lineup signatures from previous rounds: ${JSON.stringify(Array.from(seenSignatures))}`
               : "No previous candidate signatures yet.",
@@ -2909,6 +3009,8 @@ export async function POST(request: Request) {
             intent: canonicalIntent,
             weatherContext: weatherContextSummary || null,
             recentUsedIds,
+            anchorGarmentId: effectiveAnchorGarmentId,
+            anchorMode: effectiveAnchorMode,
             compactWardrobe,
             garmentById,
             garmentCategoryById,
@@ -2918,6 +3020,17 @@ export async function POST(request: Request) {
             console.info(
               "[ai-look][single][step-2][candidate-dropped]",
               JSON.stringify({ reason: "failed-validation-or-normalization" })
+            );
+            continue;
+          }
+          if (
+            effectiveAnchorMode === "strict" &&
+            effectiveAnchorGarmentId != null &&
+            !validated.selectedGarmentIds.includes(effectiveAnchorGarmentId)
+          ) {
+            console.info(
+              "[ai-look][single][anchor][candidate-dropped]",
+              JSON.stringify({ reason: "missing-anchor-after-normalization" })
             );
             continue;
           }
@@ -2962,6 +3075,8 @@ export async function POST(request: Request) {
         weatherContext: weatherContextSummary || null,
         recentUsedIds,
         avoidSignatures: recentSignatureSet,
+        anchorGarmentId: effectiveAnchorGarmentId,
+        anchorMode: effectiveAnchorMode,
         compactWardrobe,
         garmentById,
         garmentCategoryById,
@@ -2969,7 +3084,12 @@ export async function POST(request: Request) {
       if (selectedLook) {
         console.info(
           "[ai-look][single][step-2][fallback-used]",
-          JSON.stringify({ signature: selectedLook.signature })
+          JSON.stringify({
+            signature: selectedLook.signature,
+            includedAnchor:
+              effectiveAnchorGarmentId != null &&
+              selectedLook.selectedGarmentIds.includes(effectiveAnchorGarmentId),
+          })
         );
       }
     }
@@ -2980,6 +3100,16 @@ export async function POST(request: Request) {
         { status: 422 }
       );
     }
+    if (
+      effectiveAnchorMode === "strict" &&
+      effectiveAnchorGarmentId != null &&
+      !selectedLook.selectedGarmentIds.includes(effectiveAnchorGarmentId)
+    ) {
+      return NextResponse.json(
+        { error: "Could not produce a complete anchored look with current wardrobe constraints." },
+        { status: 422 }
+      );
+    }
 
     console.info(
       "[ai-look][single][step-2][selected]",
@@ -2987,6 +3117,9 @@ export async function POST(request: Request) {
         signature: selectedLook.signature,
         confidence: selectedLook.confidence,
         repeatedFromHistory: recentSignatureSet.has(selectedLook.signature),
+        includedAnchor:
+          effectiveAnchorGarmentId != null &&
+          selectedLook.selectedGarmentIds.includes(effectiveAnchorGarmentId),
         rerankScore: computeSingleLookRerankScore({
           candidate: selectedLook,
           history: recentSingleHistory,

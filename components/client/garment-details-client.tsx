@@ -8,6 +8,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
 import { Toaster } from '@/components/ui/sonner';
 import { Garment, MaterialComposition } from '@/lib/types';
 import { toast } from 'sonner';
@@ -57,6 +65,9 @@ export default function GarmentDetailsClient({
   canEdit?: boolean;
 }) {
   const [isImageOpen, setIsImageOpen] = useState(false);
+  const [isActionsOpen, setIsActionsOpen] = useState(false);
+  const [actionsSearchValue, setActionsSearchValue] = useState('');
+  const [actionsDebouncedSearchValue, setActionsDebouncedSearchValue] = useState('');
   const hasShownUpdateToastRef = useRef(false);
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -76,6 +87,65 @@ export default function GarmentDetailsClient({
     router.replace(nextUrl, { scroll: false });
   }, [pathname, router, searchParams]);
 
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setActionsDebouncedSearchValue(actionsSearchValue);
+    }, 120);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [actionsSearchValue]);
+
+  const handleGenerateAnchoredLook = () => {
+    setIsActionsOpen(false);
+    setActionsSearchValue('');
+    router.push(`/ai-look?anchorGarmentId=${garment.id}&anchorMode=strict`);
+  };
+
+  const handleEditFromCommand = () => {
+    setIsActionsOpen(false);
+    setActionsSearchValue('');
+    router.push(`/editor?garmentId=${garment.id}`);
+  };
+
+  useEffect(() => {
+    if (!canEdit) return;
+
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'k' || (!event.metaKey && !event.ctrlKey)) return;
+      const target = event.target as HTMLElement | null;
+      const isTypingTarget = !!target?.closest('input, textarea, select, [contenteditable="true"]');
+      if (isTypingTarget) return;
+
+      event.preventDefault();
+      setIsActionsOpen((prev) => !prev);
+    };
+
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  }, [canEdit]);
+
+  useEffect(() => {
+    if (!canEdit || !isActionsOpen) return;
+
+    const handleActionHotkeys = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (actionsSearchValue.trim().length > 0) return;
+
+      if (event.key === 'E') {
+        event.preventDefault();
+        handleEditFromCommand();
+        return;
+      }
+      if (event.key === 'G') {
+        event.preventDefault();
+        handleGenerateAnchoredLook();
+      }
+    };
+
+    window.addEventListener('keydown', handleActionHotkeys);
+    return () => window.removeEventListener('keydown', handleActionHotkeys);
+  }, [actionsSearchValue, canEdit, isActionsOpen]);
+
   const joinOrFallback = (values: string[] | undefined, fallback: string) =>
     Array.isArray(values) && values.length > 0 ? values.join(', ') : fallback;
 
@@ -85,10 +155,82 @@ export default function GarmentDetailsClient({
   const detailsGridClass = canEdit
     ? 'grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-start'
     : 'grid gap-4';
+  const actionQuery = actionsDebouncedSearchValue.trim().toLowerCase();
+  const showActionThresholdHint = actionsSearchValue.trim().length > 0 && actionsSearchValue.trim().length < 2;
+
+  const actionMatches = (searchTarget: string): boolean => {
+    if (!actionQuery) return true;
+    if (actionQuery.length < 2) return false;
+    return searchTarget.toLowerCase().includes(actionQuery);
+  };
+
+  const showGenerateAction = actionMatches('generate look around this garment anchor ai');
+  const showEditAction = actionMatches('edit this garment editor update');
+  const showNoActionsFound = !showActionThresholdHint && !showGenerateAction && !showEditAction;
 
   return (
     <div className="box-border min-h-[calc(100dvh-65px)] bg-slate-100 p-4 md:p-6">
       <Toaster />
+      {canEdit && (
+        <CommandDialog
+          open={isActionsOpen}
+          onOpenChange={(open) => {
+            setIsActionsOpen(open);
+            if (!open) {
+              setActionsSearchValue('');
+            }
+          }}
+          title="Garment Actions"
+          description="Run actions for this garment."
+          className="max-w-md"
+        >
+          <CommandInput
+            placeholder="Search actions... (E = Edit, G = Generate)"
+            value={actionsSearchValue}
+            onValueChange={setActionsSearchValue}
+          />
+          <CommandList>
+            {showActionThresholdHint ? (
+              <p className="py-6 text-center text-sm text-gray-600">Type at least 2 characters</p>
+            ) : (
+              <CommandEmpty>No actions found</CommandEmpty>
+            )}
+            {showGenerateAction && (
+              <CommandGroup heading="AI Look">
+                <CommandItem
+                  value="Generate Look Around This Garment"
+                  keywords={["generate", "look", "around", "garment", "anchor", "ai"]}
+                  onSelect={handleGenerateAnchoredLook}
+                >
+                  <div className="flex w-full items-center justify-between gap-3">
+                    <span className="truncate text-sm text-gray-800">Generate Look Around This Garment</span>
+                    <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                      G
+                    </span>
+                  </div>
+                </CommandItem>
+              </CommandGroup>
+            )}
+            {showEditAction && (
+              <CommandGroup heading="Garment">
+                <CommandItem
+                  value="Edit This Garment"
+                  keywords={["edit", "garment", "editor", "update"]}
+                  onSelect={handleEditFromCommand}
+                >
+                  <div className="flex w-full items-center justify-between gap-3">
+                    <span className="truncate text-sm text-gray-800">Edit This Garment</span>
+                    <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                      E
+                    </span>
+                  </div>
+                </CommandItem>
+              </CommandGroup>
+            )}
+            {showNoActionsFound && null}
+          </CommandList>
+        </CommandDialog>
+      )}
       <div className="mx-auto mb-4 w-full max-w-[1700px]">
         <Link href="/viewer" className="text-sm font-medium text-slate-700 hover:text-slate-900 hover:underline">
           &larr; Back to Wardrobe
@@ -292,6 +434,14 @@ export default function GarmentDetailsClient({
                 <div className="flex flex-col gap-2">
                   <Button asChild className="w-full">
                     <Link href={`/editor?garmentId=${garment.id}`} prefetch={false}>Edit</Link>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => setIsActionsOpen(true)}
+                  >
+                    Actions (Cmd/Ctrl+K)
                   </Button>
                 </div>
               </CardContent>

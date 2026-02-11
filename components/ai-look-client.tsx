@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -89,6 +90,7 @@ interface TravelPlanResponse {
 }
 
 type AiMode = "single" | "travel";
+type AnchorMode = "strict" | "soft";
 
 const isValidSingleLookResult = (value: unknown): value is SingleLookResult => {
   if (!value || typeof value !== "object") return false;
@@ -127,10 +129,16 @@ const parseSingleLookResponse = (value: unknown): SingleLookResponse | null => {
 };
 
 export default function AiLookClient() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [activeMode, setActiveMode] = useState<AiMode>("single");
 
   const [prompt, setPrompt] = useState("");
   const [singleResult, setSingleResult] = useState<SingleLookResponse | null>(null);
+  const [anchorGarmentId, setAnchorGarmentId] = useState<number | null>(null);
+  const [anchorMode, setAnchorMode] = useState<AnchorMode>("strict");
+  const [anchorLabel, setAnchorLabel] = useState<string | null>(null);
 
   const [destination, setDestination] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -163,6 +171,58 @@ export default function AiLookClient() {
   const isTravelLoading = isLoading && loadingMode === "travel";
   const primaryLook = singleResult?.primaryLook ?? null;
 
+  useEffect(() => {
+    const rawAnchorId = searchParams.get("anchorGarmentId");
+    const parsedAnchorId = rawAnchorId ? Number(rawAnchorId) : null;
+    const nextAnchorId =
+      parsedAnchorId != null && Number.isInteger(parsedAnchorId) && parsedAnchorId > 0
+        ? parsedAnchorId
+        : null;
+    const rawAnchorMode = searchParams.get("anchorMode");
+    const nextAnchorMode: AnchorMode = rawAnchorMode === "soft" ? "soft" : "strict";
+    setAnchorGarmentId(nextAnchorId);
+    setAnchorMode(nextAnchorMode);
+  }, [searchParams]);
+
+  useEffect(() => {
+    let isActive = true;
+    if (anchorGarmentId == null) {
+      setAnchorLabel(null);
+      return () => {
+        isActive = false;
+      };
+    }
+
+    setAnchorLabel(`Garment #${anchorGarmentId}`);
+    const fetchAnchorLabel = async () => {
+      try {
+        const response = await fetch("/api/wardrobe?fresh=1", { cache: "no-store" });
+        if (!response.ok) return;
+        const wardrobe = await response.json() as Array<{ id: number; model: string; brand: string; type: string }>;
+        if (!isActive) return;
+        const anchorGarment = wardrobe.find((garment) => garment.id === anchorGarmentId);
+        if (anchorGarment) {
+          setAnchorLabel(`${anchorGarment.model} — ${anchorGarment.brand} (${anchorGarment.type})`);
+        }
+      } catch {
+        // Leave fallback label.
+      }
+    };
+
+    void fetchAnchorLabel();
+    return () => {
+      isActive = false;
+    };
+  }, [anchorGarmentId]);
+
+  const handleClearAnchor = () => {
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete("anchorGarmentId");
+    nextParams.delete("anchorMode");
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
+  };
+
   const handleGenerateSingle = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmedPrompt = prompt.trim();
@@ -178,10 +238,19 @@ export default function AiLookClient() {
     setTravelResult(null);
 
     try {
+      const payload: {
+        prompt: string;
+        anchorGarmentId?: number;
+        anchorMode?: AnchorMode;
+      } = { prompt: trimmedPrompt };
+      if (anchorGarmentId != null) {
+        payload.anchorGarmentId = anchorGarmentId;
+        payload.anchorMode = anchorMode;
+      }
       const response = await fetch("/api/ai-look", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: trimmedPrompt }),
+        body: JSON.stringify(payload),
       });
 
       const data = await response.json();
@@ -326,6 +395,17 @@ export default function AiLookClient() {
 
             {activeMode === "single" ? (
               <form onSubmit={handleGenerateSingle} className="space-y-4">
+                {anchorGarmentId != null && (
+                  <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                    <p className="text-sm text-slate-800">
+                      <span className="font-medium">Anchored on:</span>{" "}
+                      {anchorLabel ?? `Garment #${anchorGarmentId}`} ({anchorMode})
+                    </p>
+                    <Button type="button" variant="outline" size="sm" onClick={handleClearAnchor} disabled={isLoading}>
+                      Clear anchor
+                    </Button>
+                  </div>
+                )}
                 <Textarea
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
