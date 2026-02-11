@@ -66,20 +66,25 @@ Use imperative commit subjects.
 4. Editor pages (`/editor`, `/add-garment`) preload wardrobe/schema/editor-options server-side and render `EditorForm` inside `Suspense` with a layout-matching skeleton fallback to avoid empty-state flash and layout shift.
 5. AI look page (`/ai-look`) is route-guarded server-side and renders a client UI with two tabs: (a) free-text single-look generation and (b) "Pack for Travel" planning.
 6. `/api/ai-look` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
-7. Single-look mode uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) look generation constrained to wardrobe IDs, plus deterministic match scoring blended with model confidence.
+7. Single-look mode uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) multi-candidate look generation constrained to wardrobe IDs, followed by server-side validation, normalization, reranking, and one final look selection.
 8. Travel mode geocodes destination and enriches each trip day with forecast weather when available; if exact day forecast is unavailable, it falls back to LLM-estimated monthly climate for the destination, then to deterministic seasonal inference only if the LLM fallback fails.
 9. Travel generation follows a two-step pattern per day: (a) interpret structured day context into canonical intent, then (b) generate one wardrobe-only look using a scored candidate subset of eligible garments (category quotas + novelty weighting) plus strict day constraints.
 
 ## AI Look Agent (Mode Summary)
 1. Single-look interpretation: `/api/ai-look` maps free-text input into canonical wardrobe intent (`weather`, `occasion`, `place`, `timeOfDay`, `formality`, `style`) via structured output; the model can tool-call `getWeatherByLocation` for live weather context.
    - Single-look weather is resolved as current conditions for the indicated place; prompt date parsing is intentionally not used in single-look mode.
-2. Single-look recommendation: The model returns one wardrobe-only lineup (`selectedGarmentIds` ordered top-to-bottom), validated against DB IDs and then deterministically normalized to enforce exactly four pieces (`outerwear + top + bottom + footwear`) before confidence calibration.
-   - Final single-look rationale text is generated server-side as a concise intent-focused paragraph from normalized lineup + canonical intent/weather context (no garment-by-garment or material descriptions), so rationale cannot reference garments outside the returned lineup.
+2. Single-look recommendation: Step 2 attempts up to six candidates and degrades gracefully when fewer valid candidates are returned. Candidates are wardrobe-ID-only, validated against DB IDs, normalized to exactly four pieces (`outerwear + top + bottom + footwear`), deduplicated by signature, and reranked with objective fit + model confidence + recency/overlap controls.
+   - Final output returns exactly one look in single mode (`primaryLook`).
+   - Single mode stores recent lineup signatures in DB table `ai_look_lineup_history`, applies hard no-repeat/no-high-overlap filtering when alternatives exist, and falls back to repeated signatures only when no viable alternative survives.
+   - `ai_look_lineup_history` is provisioned via explicit SQL migration script `scripts/sql/create-ai-look-lineup-history.sql` (no runtime auto-create).
+   - Final single-look rationale text is generated server-side from normalized lineup + canonical intent/weather context so rationale cannot drift from selected garments.
 3. Travel planning (`mode: "travel"`): Inputs are `destination`, `startDate`, `endDate`, and `reason` (`Vacation`, `Office`, `Customer visit`).
 4. Travel weather enrichment: Each day in range attempts OpenWeather forecast; if unavailable, fallback uses LLM monthly climate estimation for the destination/month (average temperatures + likely conditions), with deterministic month/hemisphere fallback only if LLM climate estimation fails.
 5. Travel recommendation: One look is generated per day with strict completeness (outerwear/jacket-or-coat + top + bottom + footwear), exactly one outerwear piece for the entire trip (departure, stay days, and return), max one footwear pair across stay days (commute days exempt), commute-day garment reservation (travel-day garments cannot be reused on in-between stay days, except the locked single outerwear which must be reused trip-wide), hard per-day place/occasion constraints (travel days require airport/commute tags; office stay days require office-compatible places plus `Casual Social`/`Date Night / Intimate Dinner`/`Outdoor Social / Garden Party` occasions; customer-visit days require office/business tags; vacation days require city/active tags with beach enabled only when destination signals beach and weather is warm), anti-repeat controls (recent-look history prompt + deterministic duplicate/overlap rejection + lineup diversification), and a server-side max travel span of 21 days to cap AI/tool amplification. Days that cannot be satisfied are returned in `skippedDays` instead of failing the full response.
+   - Travel mode now also uses persistence-backed cross-request diversity scoped by travel fingerprint (`destination + reason + startDate + endDate`) via table `ai_look_travel_day_history`; repeated day signatures are hard-avoided when alternatives exist and allowed only as graceful fallback.
+   - `ai_look_travel_day_history` is provisioned via explicit SQL migration script `scripts/sql/create-ai-look-travel-day-history.sql` (no runtime auto-create).
    - Travel day rationale text is also generated server-side as concise intent-focused text from each finalized day lineup + interpreted day intent/weather, preventing post-normalization rationale drift.
-6. UI exposure: `/ai-look` shows both tabbed modes, with travel output rendered as per-day cards and skipped-day diagnostics.
+6. UI exposure: `/ai-look` shows both tabbed modes; single-look mode renders one selected look card, while travel output is rendered as per-day cards with skipped-day diagnostics.
 
 ## Authorization strategy
 - `EDITOR_OWNER_EMAIL` is the single source of truth for editor authorization.
@@ -230,6 +235,13 @@ Most likely with a **composite primary key** on `(garment_id, *_id)`.
   * `suitable_times_of_day`
   * `suitable_places`
   * `suitable_occasions`
+
+### AI Memory Tables
+
+* `ai_look_lineup_history`
+  * single-look recency memory (`owner_key`, `mode`, `lineup_signature`, `garment_ids_json`, `created_at`)
+* `ai_look_travel_day_history`
+  * travel day recency memory (`owner_key`, `request_fingerprint`, `day_date`, `day_index`, `lineup_signature`, `garment_ids_json`, `created_at`)
 
 
 # 3. IMPORTANT: Self-Improvement

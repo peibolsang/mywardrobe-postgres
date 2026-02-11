@@ -34,12 +34,16 @@ const intentSchema = z.object({
   notes: z.string(),
 }).strict();
 
-const recommendationSchema = z.object({
+const singleLookCandidateSchema = z.object({
   lookName: z.string().min(1),
   selectedGarmentIds: z.array(z.number().int()).min(4).max(8),
   rationale: z.string().min(1),
   modelConfidence: z.number().min(0).max(100),
-});
+}).strict();
+
+const singleLookCandidateBatchSchema = z.object({
+  candidates: z.array(singleLookCandidateSchema).min(1).max(6),
+}).strict();
 
 const travelDayRecommendationSchema = z.object({
   lookName: z.string().min(1),
@@ -95,6 +99,16 @@ interface TravelReasonIntent {
   occasion: string[];
   place: string[];
   notes: string;
+}
+interface SingleLookCandidate {
+  lookName: string;
+  rationale: string;
+  selectedGarmentIds: number[];
+  lineupGarments: Garment[];
+  signature: string;
+  matchScore: number;
+  modelConfidence: number;
+  confidence: number;
 }
 
 interface StrictDayConstraints {
@@ -175,6 +189,22 @@ Output requirements:
 - Do not include garment IDs in the rationale text.
 `;
 
+const SINGLE_CANDIDATE_RECOMMENDER_APPENDIX = `
+Output requirements:
+- Return up to 6 distinct candidate looks in "candidates".
+- Use only garment IDs from the provided wardrobe JSON.
+- selectedGarmentIds must be ordered from top to bottom.
+- Each candidate must contain exactly four garments: one outerwear item (jacket/coat), one top, one bottom, and one footwear item.
+- Keep each candidate rationale concise and grounded in canonical intent.
+- Avoid returning duplicate lineups across candidates.
+- Do not include garment IDs in rationale text.
+`;
+
+const SINGLE_LOOK_TARGET_CANDIDATES = 6;
+const SINGLE_LOOK_MAX_GENERATION_ATTEMPTS = 2;
+const SINGLE_RECENT_HISTORY_LIMIT = 18;
+const TRAVEL_HISTORY_ROW_LIMIT = 240;
+
 const WEATHER_TOOL_INPUT_SCHEMA = z.object({
   locationQuery: z.string().min(1).describe("Location query string, e.g. 'Aviles, Asturias, Spain'."),
 }).strict();
@@ -188,11 +218,20 @@ const joinNaturalList = (values: string[]): string => {
   return `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
 };
 
-const toCompactSentence = (value: string, maxLength: number): string => {
-  const compact = normalize(value).replace(/\s+/g, " ");
-  if (!compact) return "";
-  if (compact.length <= maxLength) return compact;
-  return `${compact.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+const stripWeatherNotes = (value: string): string => {
+  const normalized = normalize(value).replace(/\s+/g, " ");
+  if (!normalized) return "";
+
+  const sentences = normalized
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => normalize(sentence))
+    .filter(Boolean);
+
+  const filtered = sentences.filter((sentence) =>
+    !/\b(weather|forecast|temperature|conditions|humidity|wind|celsius|°c)\b/i.test(sentence)
+  );
+
+  return filtered.join(" ").trim();
 };
 
 const toSentence = (value: string): string => {
@@ -276,12 +315,18 @@ const buildAlignedRationale = ({
       ? toSentence(`Weather support is aligned to ${joinNaturalList(weatherTags)} conditions to keep the outfit practical`)
       : "Weather cues are limited, so the look favors adaptable layering and all-day comfort.";
 
-  const normalizedNotes = normalize(intent.notes)
+  let normalizedNotes = normalize(intent.notes)
     .replace(/\b(current\s+)?weather\s+(resolved|considered)[^.]*\.?/gi, "")
     .replace(/\bweather data[^.]*unavailable[^.]*\.?/gi, "")
     .replace(/\bweather data[^.]*not available[^.]*\.?/gi, "")
+    .replace(/\bweather data[^.]*not found[^.]*\.?/gi, "")
+    .replace(/\bassuming[^.]*weather[^.]*\.?/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
+
+  if (normalizedWeatherContext) {
+    normalizedNotes = stripWeatherNotes(normalizedNotes);
+  }
 
   const notesSentence = normalizedNotes
     ? toSentence(`${normalizedNotes}`)
@@ -966,6 +1011,8 @@ const diversifyLineupFromPool = ({
   usedGarmentIds,
   usedLookSignatures,
   recentLookHistory,
+  avoidSignatures,
+  avoidHistoryIds,
   blockedIds,
   lockedFootwearId,
   lockedOuterwearId,
@@ -979,6 +1026,8 @@ const diversifyLineupFromPool = ({
   usedGarmentIds: Set<number>;
   usedLookSignatures: Set<string>;
   recentLookHistory: Array<{ date: string; ids: number[] }>;
+  avoidSignatures?: Set<string>;
+  avoidHistoryIds?: number[][];
   blockedIds: number[];
   lockedFootwearId: number | null;
   lockedOuterwearId: number | null;
@@ -986,12 +1035,19 @@ const diversifyLineupFromPool = ({
   intent: CanonicalIntent;
   requiredCategories?: GarmentCategory[];
 }): number[] => {
-  const historyIds = recentLookHistory.map((entry) => entry.ids);
+  const historyIds = [
+    ...recentLookHistory.map((entry) => entry.ids),
+    ...(avoidHistoryIds ?? []),
+  ];
   const current = toTopDownOrderedIds(ids, garmentCategoryById);
   const currentSignature = lineupSignature(current);
   const currentOverlap = maxOverlapAgainstHistory(current, historyIds);
 
-  if (!usedLookSignatures.has(currentSignature) && currentOverlap <= MAX_ALLOWED_OVERLAP_RATIO) {
+  if (
+    !usedLookSignatures.has(currentSignature) &&
+    !(avoidSignatures?.has(currentSignature) ?? false) &&
+    currentOverlap <= MAX_ALLOWED_OVERLAP_RATIO
+  ) {
     return current;
   }
 
@@ -1037,6 +1093,7 @@ const diversifyLineupFromPool = ({
       const nextSignature = lineupSignature(normalized);
       const nextOverlap = maxOverlapAgainstHistory(normalized, historyIds);
       if (usedLookSignatures.has(nextSignature)) continue;
+      if (avoidSignatures?.has(nextSignature)) continue;
       if (nextOverlap > MAX_ALLOWED_OVERLAP_RATIO && nextOverlap >= currentOverlap) continue;
       return normalized;
     }
@@ -1051,12 +1108,16 @@ const normalizeToFixedCategoryLook = ({
   garmentCategoryById,
   intent,
   requiredCategories,
+  recentUsedIds,
+  preferProvidedIds = true,
 }: {
   ids: number[];
   pool: CompactGarment[];
   garmentCategoryById: Map<number, GarmentCategory>;
   intent: CanonicalIntent;
   requiredCategories: GarmentCategory[];
+  recentUsedIds?: Set<number>;
+  preferProvidedIds?: boolean;
 }): number[] => {
   const poolById = new Map(pool.map((garment) => [garment.id, garment]));
   let normalized = toTopDownOrderedIds(ids, garmentCategoryById);
@@ -1078,6 +1139,7 @@ const normalizeToFixedCategoryLook = ({
 
   for (const category of requiredCategories) {
     const currentCategoryIds = normalized.filter((id) => garmentCategoryById.get(id) === category && !used.has(id));
+    const currentCategoryIdSet = new Set(currentCategoryIds);
     const fallbackIds = pool
       .filter((garment) => categorizeType(garment.type) === category && !used.has(garment.id))
       .map((garment) => garment.id);
@@ -1085,7 +1147,12 @@ const normalizeToFixedCategoryLook = ({
       .map((id) => {
         const garment = poolById.get(id);
         if (!garment) return null;
-        const score = scoreGarmentForIntent(garment, intent) + (garment.favorite ? 4 : 0);
+        const isProvided = currentCategoryIdSet.has(id);
+        const providedBonus = preferProvidedIds && isProvided ? 18 : 0;
+        const noveltyBonus = recentUsedIds
+          ? (recentUsedIds.has(id) ? -14 : 8)
+          : 0;
+        const score = scoreGarmentForIntent(garment, intent) + (garment.favorite ? 4 : 0) + providedBonus + noveltyBonus;
         return { id, score };
       })
       .filter((item): item is { id: number; score: number } => Boolean(item))
@@ -1170,6 +1237,366 @@ const computeObjectiveMatchScore = (lineup: Garment[], intent: CanonicalIntent):
   const active = [...dimensionScores, completenessScore];
   const average = active.reduce((sum, value) => sum + value, 0) / active.length;
   return Math.round(average);
+};
+
+const toValidatedSingleLookCandidate = ({
+  lookName,
+  modelConfidence,
+  ids,
+  intent,
+  weatherContext,
+  recentUsedIds,
+  compactWardrobe,
+  garmentById,
+  garmentCategoryById,
+}: {
+  lookName: string;
+  modelConfidence: number;
+  ids: number[];
+  intent: CanonicalIntent;
+  weatherContext?: string | null;
+  recentUsedIds?: Set<number>;
+  compactWardrobe: CompactGarment[];
+  garmentById: Map<number, Garment>;
+  garmentCategoryById: Map<number, GarmentCategory>;
+}): SingleLookCandidate | null => {
+  const uniqueValidIds = Array.from(new Set(ids.filter((id) => garmentById.has(id))));
+  if (uniqueValidIds.length === 0) return null;
+
+  const normalizedIds = normalizeToFixedCategoryLook({
+    ids: uniqueValidIds,
+    pool: compactWardrobe,
+    garmentCategoryById,
+    intent,
+    requiredCategories: SINGLE_REQUIRED_CATEGORIES,
+    recentUsedIds,
+    preferProvidedIds: true,
+  });
+  if (!hasCoreSilhouetteFromIds(normalizedIds, garmentCategoryById, SINGLE_REQUIRED_CATEGORIES)) {
+    return null;
+  }
+
+  const lineupGarments = normalizedIds.map((id) => garmentById.get(id)!).filter(Boolean);
+  if (lineupGarments.length !== SINGLE_REQUIRED_CATEGORIES.length) return null;
+
+  const matchScore = computeObjectiveMatchScore(lineupGarments, intent);
+  const roundedModelConfidence = Math.max(0, Math.min(100, Math.round(modelConfidence)));
+  const confidence = Math.max(
+    20,
+    Math.min(100, Math.round((roundedModelConfidence * 0.3) + (matchScore * 0.7)))
+  );
+
+  const baseRationale = buildAlignedRationale({
+    lineupGarments,
+    intent,
+    weatherContext: weatherContext || null,
+  });
+
+  return {
+    lookName: normalize(lookName) || "Curated Wardrobe Look",
+    rationale: baseRationale,
+    selectedGarmentIds: normalizedIds,
+    lineupGarments,
+    signature: lineupSignature(normalizedIds),
+    matchScore,
+    modelConfidence: roundedModelConfidence,
+    confidence,
+  };
+};
+
+const buildDeterministicSingleLookFallbackCandidate = ({
+  intent,
+  weatherContext,
+  recentUsedIds,
+  avoidSignatures,
+  compactWardrobe,
+  garmentById,
+  garmentCategoryById,
+}: {
+  intent: CanonicalIntent;
+  weatherContext?: string | null;
+  recentUsedIds?: Set<number>;
+  avoidSignatures?: Set<string>;
+  compactWardrobe: CompactGarment[];
+  garmentById: Map<number, Garment>;
+  garmentCategoryById: Map<number, GarmentCategory>;
+}): SingleLookCandidate | null => {
+  const selected: number[] = [];
+  const used = new Set<number>();
+
+  for (const category of SINGLE_REQUIRED_CATEGORIES) {
+    const options = compactWardrobe
+      .filter((garment) => categorizeType(garment.type) === category && !used.has(garment.id))
+      .map((garment) => ({
+        garment,
+        score:
+          scoreGarmentForIntent(garment, intent) +
+          (garment.favorite ? 6 : 0) +
+          (recentUsedIds?.has(garment.id) ? -14 : 8),
+      }))
+      .sort((left, right) => right.score - left.score || left.garment.id - right.garment.id);
+
+    const chosen = options[0]?.garment;
+    if (!chosen) return null;
+    selected.push(chosen.id);
+    used.add(chosen.id);
+  }
+
+  const candidate = toValidatedSingleLookCandidate({
+    lookName: "Curated Wardrobe Fallback",
+    modelConfidence: 65,
+    ids: selected,
+    intent,
+    weatherContext,
+    recentUsedIds,
+    compactWardrobe,
+    garmentById,
+    garmentCategoryById,
+  });
+
+  if (!candidate) return null;
+  if (avoidSignatures && avoidSignatures.has(candidate.signature)) {
+    return null;
+  }
+  return candidate;
+};
+
+type SingleLookHistoryEntry = {
+  signature: string;
+  ids: number[];
+};
+
+type TravelDayHistoryEntry = {
+  dayDate: string;
+  dayIndex: number;
+  signature: string;
+  ids: number[];
+};
+
+const parseHistoryIds = (raw: string): number[] => {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0);
+  } catch {
+    return [];
+  }
+};
+
+const normalizeFingerprintSegment = (value: string): string =>
+  normalize(value).toLowerCase().replace(/\s+/g, " ");
+
+const buildTravelRequestFingerprint = ({
+  destinationLabel,
+  reason,
+  startDate,
+  endDate,
+}: {
+  destinationLabel: string;
+  reason: "Vacation" | "Office" | "Customer visit";
+  startDate: string;
+  endDate: string;
+}): string =>
+  [
+    normalizeFingerprintSegment(destinationLabel),
+    normalizeFingerprintSegment(reason),
+    normalizeFingerprintSegment(startDate),
+    normalizeFingerprintSegment(endDate),
+  ].join("|");
+
+const getRecentSingleLookHistory = async (ownerKey: string): Promise<SingleLookHistoryEntry[]> => {
+  const rows = await sql`
+    SELECT lineup_signature, garment_ids_json
+    FROM ai_look_lineup_history
+    WHERE owner_key = ${ownerKey}
+      AND mode = 'single'
+    ORDER BY created_at DESC
+    LIMIT ${SINGLE_RECENT_HISTORY_LIMIT};
+  ` as Array<{ lineup_signature: string; garment_ids_json: string }>;
+
+  return rows.map((row) => ({
+    signature: normalize(row.lineup_signature),
+    ids: parseHistoryIds(normalize(row.garment_ids_json)),
+  }));
+};
+
+const getTravelDayHistoryForRequest = async ({
+  ownerKey,
+  requestFingerprint,
+}: {
+  ownerKey: string;
+  requestFingerprint: string;
+}): Promise<TravelDayHistoryEntry[]> => {
+  const rows = await sql`
+    SELECT day_date::text AS day_date, day_index, lineup_signature, garment_ids_json
+    FROM ai_look_travel_day_history
+    WHERE owner_key = ${ownerKey}
+      AND request_fingerprint = ${requestFingerprint}
+    ORDER BY created_at DESC
+    LIMIT ${TRAVEL_HISTORY_ROW_LIMIT};
+  ` as Array<{
+    day_date: string;
+    day_index: number;
+    lineup_signature: string;
+    garment_ids_json: string;
+  }>;
+
+  return rows
+    .map((row) => ({
+      dayDate: normalize(row.day_date),
+      dayIndex: Number.isInteger(Number(row.day_index)) ? Number(row.day_index) : 0,
+      signature: normalize(row.lineup_signature),
+      ids: parseHistoryIds(normalize(row.garment_ids_json)),
+    }))
+    .filter((row) => Boolean(row.dayDate) && Boolean(row.signature) && row.ids.length > 0);
+};
+
+const persistSingleLookHistory = async ({
+  ownerKey,
+  ids,
+}: {
+  ownerKey: string;
+  ids: number[];
+}): Promise<void> => {
+  const normalizedIds = Array.from(new Set(ids));
+  const signature = lineupSignature(normalizedIds);
+  await sql`
+    INSERT INTO ai_look_lineup_history (
+      owner_key,
+      mode,
+      panelist_key,
+      lineup_signature,
+      garment_ids_json
+    )
+    VALUES (
+      ${ownerKey},
+      'single',
+      'single',
+      ${signature},
+      ${JSON.stringify(normalizedIds)}
+    );
+  `;
+};
+
+const persistTravelDayHistory = async ({
+  ownerKey,
+  requestFingerprint,
+  destinationLabel,
+  reason,
+  days,
+}: {
+  ownerKey: string;
+  requestFingerprint: string;
+  destinationLabel: string;
+  reason: "Vacation" | "Office" | "Customer visit";
+  days: Array<{ dayDate: string; dayIndex: number; signature: string; ids: number[] }>;
+}): Promise<void> => {
+  for (const day of days) {
+    const normalizedIds = Array.from(new Set(day.ids.filter((id) => Number.isInteger(id) && id > 0)));
+    if (!day.dayDate || normalizedIds.length === 0 || !day.signature) continue;
+
+    await sql`
+      INSERT INTO ai_look_travel_day_history (
+        owner_key,
+        request_fingerprint,
+        destination_label,
+        reason,
+        day_date,
+        day_index,
+        lineup_signature,
+        garment_ids_json
+      )
+      VALUES (
+        ${ownerKey},
+        ${requestFingerprint},
+        ${destinationLabel},
+        ${reason},
+        ${day.dayDate},
+        ${day.dayIndex},
+        ${day.signature},
+        ${JSON.stringify(normalizedIds)}
+      );
+    `;
+  }
+};
+
+const recentSignatureSetFromHistory = (history: SingleLookHistoryEntry[]): Set<string> =>
+  new Set(history.map((entry) => entry.signature).filter(Boolean));
+
+const recentUsedIdSetFromHistory = (history: SingleLookHistoryEntry[]): Set<number> =>
+  new Set(history.flatMap((entry) => entry.ids));
+
+const computeSingleLookRerankScore = ({
+  candidate,
+  history,
+}: {
+  candidate: SingleLookCandidate;
+  history: SingleLookHistoryEntry[];
+}): number => {
+  let score = candidate.confidence;
+
+  const matchingHistoryCount = history.filter((item) => item.signature === candidate.signature).length;
+  if (matchingHistoryCount > 0) {
+    score -= Math.min(48, matchingHistoryCount * 16);
+  }
+
+  const historyIds = history.map((item) => item.ids).filter((ids) => ids.length > 0);
+  const historyOverlap = historyIds.length > 0
+    ? maxOverlapAgainstHistory(candidate.selectedGarmentIds, historyIds)
+    : 0;
+  score -= Math.round(historyOverlap * 30);
+
+  return score;
+};
+
+const chooseTopSingleLookCandidate = ({
+  candidates,
+  history,
+}: {
+  candidates: SingleLookCandidate[];
+  history: SingleLookHistoryEntry[];
+}): SingleLookCandidate | null => {
+  if (candidates.length === 0) return null;
+
+  let pool = [...candidates];
+  const recentSignatures = recentSignatureSetFromHistory(history);
+  const historyIds = history.map((item) => item.ids).filter((ids) => ids.length > 0);
+
+  // Hard anti-repeat: if at least one non-recent signature exists, exclude recent signatures.
+  const nonRepeatedPool = pool.filter((candidate) => !recentSignatures.has(candidate.signature));
+  if (nonRepeatedPool.length > 0) {
+    pool = nonRepeatedPool;
+  }
+
+  // Hard anti-overlap: if at least one candidate is below threshold vs history, keep only those.
+  if (historyIds.length > 0) {
+    const lowOverlapPool = pool.filter(
+      (candidate) => maxOverlapAgainstHistory(candidate.selectedGarmentIds, historyIds) < MAX_ALLOWED_OVERLAP_RATIO
+    );
+    if (lowOverlapPool.length > 0) {
+      pool = lowOverlapPool;
+    }
+  }
+
+  const ranked = pool
+    .map((candidate) => ({
+      candidate,
+      rerankScore: computeSingleLookRerankScore({
+        candidate,
+        history,
+      }),
+    }))
+    .sort((left, right) => {
+      if (right.rerankScore !== left.rerankScore) return right.rerankScore - left.rerankScore;
+      if (right.candidate.confidence !== left.candidate.confidence) {
+        return right.candidate.confidence - left.candidate.confidence;
+      }
+      return left.candidate.signature.localeCompare(right.candidate.signature);
+    });
+
+  return ranked[0]?.candidate ?? null;
 };
 
 const ensureAiLookRateLimitTable = async (): Promise<void> => {
@@ -1391,6 +1818,35 @@ export async function POST(request: Request) {
       const weatherByDate = await fetchTravelWeatherByDateRange(destination, requestedDates);
       const reasonIntent = resolveTravelReasonIntent(reason);
       const destinationHasBeachSignal = destinationLooksBeachFriendly(weatherByDate.locationLabel);
+      const travelRequestFingerprint = buildTravelRequestFingerprint({
+        destinationLabel: weatherByDate.locationLabel,
+        reason,
+        startDate,
+        endDate,
+      });
+      let historicalTravelDays: TravelDayHistoryEntry[] = [];
+      try {
+        historicalTravelDays = await getTravelDayHistoryForRequest({
+          ownerKey: ownerRateLimitKey,
+          requestFingerprint: travelRequestFingerprint,
+        });
+      } catch (error) {
+        console.warn("[ai-look][travel][history][read-failed]", error);
+      }
+      const historicalTravelDaysByDate = new Map<string, TravelDayHistoryEntry[]>();
+      for (const entry of historicalTravelDays) {
+        const bucket = historicalTravelDaysByDate.get(entry.dayDate) ?? [];
+        bucket.push(entry);
+        historicalTravelDaysByDate.set(entry.dayDate, bucket);
+      }
+      console.info(
+        "[ai-look][travel][history][loaded]",
+        JSON.stringify({
+          requestFingerprint: travelRequestFingerprint,
+          rows: historicalTravelDays.length,
+          distinctDates: historicalTravelDaysByDate.size,
+        })
+      );
 
       const garmentById = new Map(wardrobeData.map((garment) => [garment.id, garment]));
       const garmentCategoryById = new Map(
@@ -1533,6 +1989,7 @@ export async function POST(request: Request) {
         interpretedIntent: CanonicalIntent;
       }> = [];
       const skippedDays: Array<{ date: string; reason: string; weatherContext: string; weatherStatus: "forecast" | "seasonal" | "failed" }> = [];
+      const travelDaysToPersist: Array<{ dayDate: string; dayIndex: number; signature: string; ids: number[] }> = [];
 
       for (let index = 0; index < weatherByDate.days.length; index += 1) {
         const dayWeather = weatherByDate.days[index];
@@ -1650,7 +2107,15 @@ export async function POST(request: Request) {
         }
 
         const recentHistory = recentLookHistory.slice(-3);
-        const recentUsedIds = Array.from(new Set(recentHistory.flatMap((item) => item.ids)));
+        const dayHistoricalRows = historicalTravelDaysByDate.get(dayWeather.date) ?? [];
+        const historicalSignatures = new Set(
+          dayHistoricalRows.map((row) => row.signature).filter(Boolean)
+        );
+        const historicalIdsByDay = dayHistoricalRows.map((row) => row.ids).filter((ids) => ids.length > 0);
+        const historicalUsedIdSet = new Set(historicalIdsByDay.flatMap((ids) => ids));
+        const recentUsedIds = Array.from(
+          new Set([...recentHistory.flatMap((item) => item.ids), ...historicalUsedIdSet])
+        );
         const promptWardrobe = buildTravelPromptWardrobe({
           eligibleWardrobe,
           dayIntent,
@@ -1662,6 +2127,18 @@ export async function POST(request: Request) {
           ],
         });
         const promptWardrobeIdSet = new Set(promptWardrobe.map((garment) => garment.id));
+        const hasHistoricalFreshPool =
+          promptWardrobe.filter((garment) => !historicalUsedIdSet.has(garment.id)).length >= 6;
+        if (dayHistoricalRows.length > 0) {
+          console.info(
+            "[ai-look][travel][history][day-loaded]",
+            JSON.stringify({
+              date: dayWeather.date,
+              rows: dayHistoricalRows.length,
+              signatures: historicalSignatures.size,
+            })
+          );
+        }
 
         const forbiddenIdSet = new Set<number>();
         if (!isTravelDay) {
@@ -1682,7 +2159,10 @@ export async function POST(request: Request) {
         const generateTravelDayLook = async (
           hardForbiddenIds: number[],
           forcedFootwearId: number | null,
-          forcedOuterwearId: number | null
+          forcedOuterwearId: number | null,
+          hardAvoidSignatures: string[],
+          softAvoidIds: number[],
+          includeRecentHistory: boolean
         ) => {
           const { object } = await generateObject({
             model: openai("gpt-4.1-mini"),
@@ -1710,10 +2190,13 @@ export async function POST(request: Request) {
               forcedOuterwearId != null
                 ? `STRICT OUTERWEAR RULE: Use outerwear ID ${forcedOuterwearId} and do not use any other outerwear ID.`
                 : "OUTERWEAR RULE: Use exactly one outerwear item in this look.",
-              avoidGarmentIds.length > 0
-                ? `SOFT RULE: Minimize repeated garments from this list when possible: ${JSON.stringify(avoidGarmentIds)}.`
+              hardAvoidSignatures.length > 0
+                ? `HARD DIVERSITY RULE: Avoid these exact lineup signatures for this same travel day when alternatives exist: ${JSON.stringify(hardAvoidSignatures)}.`
+                : "No historical day-signatures to hard avoid.",
+              softAvoidIds.length > 0
+                ? `SOFT RULE: Minimize repeated garments from this list when possible: ${JSON.stringify(softAvoidIds)}.`
                 : "No soft repeat-avoid constraints.",
-              recentHistory.length > 0
+              includeRecentHistory && recentHistory.length > 0
                 ? `RECENT LOOK HISTORY (avoid repeating full sets or high-overlap combos): ${JSON.stringify(recentHistory)}`
                 : "No recent look history yet.",
               "REPEAT RULE: Only repeat an exact lineup if no other valid lineup exists.",
@@ -1819,6 +2302,8 @@ export async function POST(request: Request) {
             usedGarmentIds,
             usedLookSignatures,
             recentLookHistory,
+            avoidSignatures: historicalSignatures,
+            avoidHistoryIds: historicalIdsByDay,
             blockedIds,
             lockedFootwearId: resolvedFootwearLock,
             lockedOuterwearId: resolvedOuterwearLock,
@@ -1842,7 +2327,15 @@ export async function POST(request: Request) {
         const getOuterwearIds = (ids: number[]) =>
           ids.filter((id) => garmentCategoryById.get(id) === "outerwear");
 
-        let generatedDay = await generateTravelDayLook(forbiddenGarmentIds, lockedFootwearId, lockedOuterwearId);
+        const historicalSignatureList = Array.from(historicalSignatures).slice(0, 20);
+        let generatedDay = await generateTravelDayLook(
+          forbiddenGarmentIds,
+          lockedFootwearId,
+          lockedOuterwearId,
+          historicalSignatureList,
+          avoidGarmentIds,
+          true
+        );
         let normalizedGeneratedDay = normalizeTravelLineupIds(
           generatedDay.selectedGarmentIds,
           lockedFootwearId,
@@ -1866,13 +2359,16 @@ export async function POST(request: Request) {
           TRAVEL_REQUIRED_CATEGORIES
         );
         const firstPassIsDuplicate = usedLookSignatures.has(firstPassSignature);
+        const firstPassIsHistoricalDuplicate =
+          hasHistoricalFreshPool && historicalSignatures.has(firstPassSignature);
 
         if (
           uniqueValidIds.length === 0 ||
           firstPassViolatesFootwear ||
           firstPassViolatesOuterwear ||
           firstPassMissingCore ||
-          firstPassIsDuplicate
+          firstPassIsDuplicate ||
+          firstPassIsHistoricalDuplicate
         ) {
           const retryFootwearId = !isTravelDay
             ? (provisionalLockedFootwearId ?? (firstPassFootwearIds.length > 0 ? firstPassFootwearIds[0] : null))
@@ -1883,7 +2379,23 @@ export async function POST(request: Request) {
             ...recentUsedIds,
             ...uniqueValidIds,
           ]));
-          generatedDay = await generateTravelDayLook(diversityForbiddenIds, retryFootwearId, retryOuterwearId);
+          if (firstPassIsHistoricalDuplicate) {
+            console.info(
+              "[ai-look][travel][history][retry-on-repeat]",
+              JSON.stringify({
+                date: dayWeather.date,
+                signature: firstPassSignature,
+              })
+            );
+          }
+          generatedDay = await generateTravelDayLook(
+            diversityForbiddenIds,
+            retryFootwearId,
+            retryOuterwearId,
+            historicalSignatureList,
+            avoidGarmentIds,
+            true
+          );
           normalizedGeneratedDay = normalizeTravelLineupIds(
             generatedDay.selectedGarmentIds,
             retryFootwearId,
@@ -1927,6 +2439,11 @@ export async function POST(request: Request) {
           const violatesDuplicateLookRule = hasWideFreshPool && usedLookSignatures.has(signature);
           const overlap = maxOverlapAgainstHistory(orderedIds, recentHistory.map((item) => item.ids));
           const violatesHighOverlapRule = hasWideFreshPool && overlap > MAX_ALLOWED_OVERLAP_RATIO;
+          const violatesHistoricalRepeatRule =
+            hasHistoricalFreshPool && historicalSignatures.has(signature);
+          const historicalOverlap = historicalIdsByDay.length > 0
+            ? maxOverlapAgainstHistory(orderedIds, historicalIdsByDay)
+            : 0;
 
           return {
             orderedIds,
@@ -1941,6 +2458,8 @@ export async function POST(request: Request) {
             violatesCoreSilhouette,
             violatesDuplicateLookRule,
             violatesHighOverlapRule,
+            violatesHistoricalRepeatRule,
+            historicalOverlap,
           };
         };
 
@@ -1957,7 +2476,84 @@ export async function POST(request: Request) {
           violatesCoreSilhouette,
           violatesDuplicateLookRule,
           violatesHighOverlapRule,
+          violatesHistoricalRepeatRule,
+          historicalOverlap,
         } = computeDayViolations(uniqueValidIds);
+
+        // Graceful fallback: if diversity pressure yields an invalid silhouette,
+        // retry once with relaxed diversity hints while preserving strict day rules.
+        if (
+          orderedIds.length === 0 ||
+          violatesFootwearRule ||
+          violatesOuterwearRule ||
+          violatesCoreSilhouette
+        ) {
+          try {
+            const relaxedGeneratedDay = await generateTravelDayLook(
+              forbiddenGarmentIds,
+              lockedFootwearId,
+              lockedOuterwearId,
+              [],
+              [],
+              false
+            );
+            const relaxedNormalized = normalizeTravelLineupIds(
+              relaxedGeneratedDay.selectedGarmentIds,
+              lockedFootwearId,
+              lockedOuterwearId
+            );
+            ({
+              orderedIds,
+              footwearIds,
+              outerwearIds,
+              signature,
+              violatesFootwearRule,
+              violatesOuterwearRule,
+              violatesTransitReserveRule,
+              violatesPlaceRule,
+              violatesOccasionRule,
+              violatesCoreSilhouette,
+              violatesDuplicateLookRule,
+              violatesHighOverlapRule,
+              violatesHistoricalRepeatRule,
+              historicalOverlap,
+            } = computeDayViolations(relaxedNormalized.ids));
+            generatedDay = relaxedGeneratedDay;
+            console.info(
+              "[ai-look][travel][fallback][relaxed-diversity-attempted]",
+              JSON.stringify({
+                date: dayWeather.date,
+                signature,
+                resolvedCoreSilhouette: !violatesCoreSilhouette,
+              })
+            );
+          } catch (error) {
+            console.warn("[ai-look][travel][fallback][relaxed-diversity-failed]", error);
+          }
+        }
+
+        const hasStrictDayViolation =
+          orderedIds.length === 0 ||
+          violatesFootwearRule ||
+          violatesOuterwearRule ||
+          violatesTransitReserveRule ||
+          violatesPlaceRule ||
+          violatesOccasionRule ||
+          violatesCoreSilhouette ||
+          violatesDuplicateLookRule ||
+          violatesHighOverlapRule;
+
+        if (violatesHistoricalRepeatRule && !hasStrictDayViolation) {
+          console.info(
+            "[ai-look][travel][history][repeat-allowed]",
+            JSON.stringify({
+              date: dayWeather.date,
+              signature,
+              historicalOverlap,
+            })
+          );
+          violatesHistoricalRepeatRule = false;
+        }
 
         if (
           orderedIds.length === 0 ||
@@ -1968,7 +2564,8 @@ export async function POST(request: Request) {
           violatesOccasionRule ||
           violatesCoreSilhouette ||
           violatesDuplicateLookRule ||
-          violatesHighOverlapRule
+          violatesHighOverlapRule ||
+          violatesHistoricalRepeatRule
         ) {
           skippedDays.push({
             date: dayWeather.date,
@@ -1984,6 +2581,8 @@ export async function POST(request: Request) {
                     ? "Could not produce a complete travel look (jacket/coat, top, bottom, footwear)."
                     : violatesDuplicateLookRule || violatesHighOverlapRule
                       ? "Could not generate a sufficiently distinct look from previous days under current constraints."
+                      : violatesHistoricalRepeatRule
+                        ? "Could not generate a sufficiently distinct look from previous identical travel runs under current constraints."
                       : violatesPlaceRule || violatesOccasionRule
                         ? `Could not satisfy strict ${strictConstraints.label.toLowerCase()} place/occasion constraints.`
                         : "Could not satisfy day constraints.",
@@ -2032,6 +2631,21 @@ export async function POST(request: Request) {
         if (recentLookHistory.length > MAX_RECENT_LOOK_HISTORY) {
           recentLookHistory.shift();
         }
+        travelDaysToPersist.push({
+          dayDate: dayWeather.date,
+          dayIndex: index,
+          signature,
+          ids: orderedIds,
+        });
+        console.info(
+          "[ai-look][travel][day-selected]",
+          JSON.stringify({
+            date: dayWeather.date,
+            signature,
+            repeatedFromHistory: historicalSignatures.has(signature),
+            historicalOverlap,
+          })
+        );
         days.push({
           date: dayWeather.date,
           lookName: generatedDay.lookName,
@@ -2050,6 +2664,27 @@ export async function POST(request: Request) {
           reusedGarmentIds,
           interpretedIntent: dayIntent,
         });
+      }
+
+      if (travelDaysToPersist.length > 0) {
+        try {
+          await persistTravelDayHistory({
+            ownerKey: ownerRateLimitKey,
+            requestFingerprint: travelRequestFingerprint,
+            destinationLabel: weatherByDate.locationLabel,
+            reason,
+            days: travelDaysToPersist,
+          });
+          console.info(
+            "[ai-look][travel][history][persisted]",
+            JSON.stringify({
+              requestFingerprint: travelRequestFingerprint,
+              rows: travelDaysToPersist.length,
+            })
+          );
+        } catch (error) {
+          console.warn("[ai-look][travel][history][write-failed]", error);
+        }
       }
 
       return NextResponse.json({
@@ -2199,31 +2834,10 @@ export async function POST(request: Request) {
     };
     console.info("[ai-look][single][step-1][canonical-intent]", JSON.stringify(canonicalIntent));
 
-    const { object } = await generateObject({
-      model: openai("gpt-4.1-mini"),
-      schema: recommendationSchema,
-      temperature: 0.7,
-      system: `${systemPrompt}\n\n${RECOMMENDER_APPENDIX}`,
-      prompt: `User request:\n${userPrompt}\n\nCanonical interpreted intent:\n${JSON.stringify(canonicalIntent)}\n\n${weatherContextSummary || "No external weather context available."}\n\nWardrobe JSON:\n${JSON.stringify(compactWardrobe)}`,
-    });
-
     const garmentById = new Map(wardrobeData.map((garment) => [garment.id, garment]));
     const garmentCategoryById = new Map(
       wardrobeData.map((garment) => [garment.id, categorizeType(garment.type)])
     );
-    const uniqueValidIds = Array.from(
-      new Set(
-        object.selectedGarmentIds.filter((id) => garmentById.has(id))
-      )
-    );
-
-    if (uniqueValidIds.length === 0) {
-      return NextResponse.json(
-        { error: "AI could not infer a valid look from current wardrobe data. Please refine your prompt." },
-        { status: 422 }
-      );
-    }
-
     const missingSingleCategories = missingCoreSilhouetteCategoriesFromWardrobe(
       compactWardrobe,
       SINGLE_REQUIRED_CATEGORIES
@@ -2235,50 +2849,176 @@ export async function POST(request: Request) {
       );
     }
 
-    const normalizedSingleLookIds = normalizeToFixedCategoryLook({
-      ids: uniqueValidIds,
-      pool: compactWardrobe,
-      garmentCategoryById,
-      intent: canonicalIntent,
-      requiredCategories: SINGLE_REQUIRED_CATEGORIES,
+    let recentSingleHistory: SingleLookHistoryEntry[] = [];
+    try {
+      recentSingleHistory = await getRecentSingleLookHistory(ownerRateLimitKey);
+    } catch (error) {
+      console.warn("[ai-look][single][history][read-failed]", error);
+    }
+    const recentSignatureSet = recentSignatureSetFromHistory(recentSingleHistory);
+    const recentUsedIds = recentUsedIdSetFromHistory(recentSingleHistory);
+
+    const collectedCandidates: SingleLookCandidate[] = [];
+    const seenSignatures = new Set<string>();
+
+    for (
+      let attempt = 0;
+      attempt < SINGLE_LOOK_MAX_GENERATION_ATTEMPTS &&
+      collectedCandidates.length < SINGLE_LOOK_TARGET_CANDIDATES;
+      attempt += 1
+    ) {
+      const remaining = SINGLE_LOOK_TARGET_CANDIDATES - collectedCandidates.length;
+      try {
+        const { object } = await generateObject({
+          model: openai("gpt-4.1-mini"),
+          schema: singleLookCandidateBatchSchema,
+          temperature: 0.7,
+          system: `${systemPrompt}\n\n${SINGLE_CANDIDATE_RECOMMENDER_APPENDIX}`,
+          prompt: [
+            `User request:\n${userPrompt}`,
+            `Canonical interpreted intent:\n${JSON.stringify(canonicalIntent)}`,
+            weatherContextSummary || "No external weather context available.",
+            `Return up to ${remaining} distinct candidates in this round.`,
+            recentSignatureSet.size > 0
+              ? `HARD DIVERSITY RULE: Avoid exact lineup signatures from recent requests when alternatives exist: ${JSON.stringify(Array.from(recentSignatureSet).slice(0, 12))}`
+              : "No recent signatures to avoid.",
+            recentUsedIds.size > 0
+              ? `SOFT NOVELTY RULE: Minimize garment reuse from these recently used IDs when alternatives exist: ${JSON.stringify(Array.from(recentUsedIds).slice(0, 40))}`
+              : "No recent garment IDs to avoid.",
+            seenSignatures.size > 0
+              ? `Do not repeat lineup signatures from previous rounds: ${JSON.stringify(Array.from(seenSignatures))}`
+              : "No previous candidate signatures yet.",
+            "Each candidate must be a complete 4-piece silhouette (outerwear, top, bottom, footwear).",
+            `Wardrobe JSON:\n${JSON.stringify(compactWardrobe)}`,
+          ].join("\n\n"),
+        });
+
+        console.info(
+          "[ai-look][single][step-2][candidates-generated]",
+          JSON.stringify({
+            attempt: attempt + 1,
+            rawCandidates: object.candidates.length,
+          })
+        );
+
+        for (const candidate of object.candidates) {
+          const validated = toValidatedSingleLookCandidate({
+            lookName: candidate.lookName,
+            modelConfidence: candidate.modelConfidence,
+            ids: candidate.selectedGarmentIds,
+            intent: canonicalIntent,
+            weatherContext: weatherContextSummary || null,
+            recentUsedIds,
+            compactWardrobe,
+            garmentById,
+            garmentCategoryById,
+          });
+
+          if (!validated) {
+            console.info(
+              "[ai-look][single][step-2][candidate-dropped]",
+              JSON.stringify({ reason: "failed-validation-or-normalization" })
+            );
+            continue;
+          }
+          if (seenSignatures.has(validated.signature)) {
+            console.info(
+              "[ai-look][single][step-2][candidate-dropped]",
+              JSON.stringify({ reason: "duplicate-signature", signature: validated.signature })
+            );
+            continue;
+          }
+
+          seenSignatures.add(validated.signature);
+          collectedCandidates.push(validated);
+          if (collectedCandidates.length >= SINGLE_LOOK_TARGET_CANDIDATES) break;
+        }
+      } catch (error) {
+        console.warn(
+          "[ai-look][single][step-2][candidate-generation-failed]",
+          JSON.stringify({ attempt: attempt + 1 })
+        );
+        console.warn(error);
+      }
+    }
+
+    console.info(
+      "[ai-look][single][step-2][candidate-final-count]",
+      JSON.stringify({
+        attemptedTarget: SINGLE_LOOK_TARGET_CANDIDATES,
+        finalValidCandidates: collectedCandidates.length,
+        nonRepeatedCandidates: collectedCandidates.filter((candidate) => !recentSignatureSet.has(candidate.signature)).length,
+      })
+    );
+
+    let selectedLook = chooseTopSingleLookCandidate({
+      candidates: collectedCandidates,
+      history: recentSingleHistory,
     });
 
-    if (!hasCoreSilhouetteFromIds(normalizedSingleLookIds, garmentCategoryById, SINGLE_REQUIRED_CATEGORIES)) {
+    if (!selectedLook) {
+      selectedLook = buildDeterministicSingleLookFallbackCandidate({
+        intent: canonicalIntent,
+        weatherContext: weatherContextSummary || null,
+        recentUsedIds,
+        avoidSignatures: recentSignatureSet,
+        compactWardrobe,
+        garmentById,
+        garmentCategoryById,
+      });
+      if (selectedLook) {
+        console.info(
+          "[ai-look][single][step-2][fallback-used]",
+          JSON.stringify({ signature: selectedLook.signature })
+        );
+      }
+    }
+
+    if (!selectedLook) {
       return NextResponse.json(
-        { error: "AI could not produce a complete 4-piece look (jacket/coat, top, bottom, footwear). Please refine your prompt." },
+        { error: "AI could not produce a complete look. Please refine your prompt." },
         { status: 422 }
       );
     }
 
-    const lineupGarments = normalizedSingleLookIds.map((id) => garmentById.get(id)!).filter(Boolean);
-    const lineup = lineupGarments.map((garment) => {
-      return {
-        id: garment.id,
-        model: garment.model,
-        brand: garment.brand,
-        type: garment.type,
-        file_name: garment.file_name,
-      };
-    });
-
-    const matchScore = computeObjectiveMatchScore(lineupGarments, canonicalIntent);
-    const modelConfidence = Math.round(object.modelConfidence);
-    const confidence = Math.max(
-      20,
-      Math.min(100, Math.round((modelConfidence * 0.3) + (matchScore * 0.7)))
+    console.info(
+      "[ai-look][single][step-2][selected]",
+      JSON.stringify({
+        signature: selectedLook.signature,
+        confidence: selectedLook.confidence,
+        repeatedFromHistory: recentSignatureSet.has(selectedLook.signature),
+        rerankScore: computeSingleLookRerankScore({
+          candidate: selectedLook,
+          history: recentSingleHistory,
+        }),
+      })
     );
 
+    try {
+      await persistSingleLookHistory({
+        ownerKey: ownerRateLimitKey,
+        ids: selectedLook.selectedGarmentIds,
+      });
+    } catch (error) {
+      console.warn("[ai-look][single][history][write-failed]", error);
+    }
+
     return NextResponse.json({
-      lookName: object.lookName,
-      lineup,
-      rationale: buildAlignedRationale({
-        lineupGarments,
-        intent: canonicalIntent,
-        weatherContext: weatherContextSummary || null,
-      }),
-      confidence,
-      modelConfidence,
-      matchScore,
+      mode: "single",
+      primaryLook: {
+        lookName: selectedLook.lookName,
+        lineup: selectedLook.lineupGarments.map((garment) => ({
+          id: garment.id,
+          model: garment.model,
+          brand: garment.brand,
+          type: garment.type,
+          file_name: garment.file_name,
+        })),
+        rationale: selectedLook.rationale,
+        confidence: selectedLook.confidence,
+        modelConfidence: selectedLook.modelConfidence,
+        matchScore: selectedLook.matchScore,
+      },
       interpretedIntent: canonicalIntent,
       weatherContext: weatherContextSummary || null,
       weatherContextStatus: weatherStatus,

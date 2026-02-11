@@ -19,13 +19,18 @@ interface LookGarment {
   file_name: string;
 }
 
-interface AiLookResponse {
+interface SingleLookResult {
   lookName: string;
   lineup: LookGarment[];
   rationale: string;
   confidence: number;
   modelConfidence: number;
   matchScore: number;
+}
+
+interface SingleLookResponse {
+  mode: "single";
+  primaryLook: SingleLookResult;
   interpretedIntent?: {
     weather: string[];
     occasion: string[];
@@ -85,11 +90,47 @@ interface TravelPlanResponse {
 
 type AiMode = "single" | "travel";
 
+const isValidSingleLookResult = (value: unknown): value is SingleLookResult => {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.lookName === "string" &&
+    Array.isArray(record.lineup) &&
+    typeof record.rationale === "string" &&
+    typeof record.confidence === "number" &&
+    typeof record.modelConfidence === "number" &&
+    typeof record.matchScore === "number"
+  );
+};
+
+const parseSingleLookResponse = (value: unknown): SingleLookResponse | null => {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (record.mode !== "single" || !isValidSingleLookResult(record.primaryLook)) return null;
+
+  return {
+    mode: "single",
+    primaryLook: record.primaryLook,
+    interpretedIntent:
+      record.interpretedIntent && typeof record.interpretedIntent === "object"
+        ? (record.interpretedIntent as SingleLookResponse["interpretedIntent"])
+        : undefined,
+    weatherContext: typeof record.weatherContext === "string" ? record.weatherContext : null,
+    weatherContextStatus:
+      record.weatherContextStatus === "not_requested" ||
+      record.weatherContextStatus === "location_detected" ||
+      record.weatherContextStatus === "fetched" ||
+      record.weatherContextStatus === "failed"
+        ? record.weatherContextStatus
+        : undefined,
+  };
+};
+
 export default function AiLookClient() {
   const [activeMode, setActiveMode] = useState<AiMode>("single");
 
   const [prompt, setPrompt] = useState("");
-  const [singleResult, setSingleResult] = useState<AiLookResponse | null>(null);
+  const [singleResult, setSingleResult] = useState<SingleLookResponse | null>(null);
 
   const [destination, setDestination] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -120,6 +161,7 @@ export default function AiLookClient() {
 
   const isSingleLoading = isLoading && loadingMode === "single";
   const isTravelLoading = isLoading && loadingMode === "travel";
+  const primaryLook = singleResult?.primaryLook ?? null;
 
   const handleGenerateSingle = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -149,7 +191,14 @@ export default function AiLookClient() {
         return;
       }
 
-      setSingleResult(data as AiLookResponse);
+      const parsed = parseSingleLookResponse(data);
+      if (!parsed) {
+        setError("No look was generated. Please refine your prompt.");
+        setSingleResult(null);
+        return;
+      }
+
+      setSingleResult(parsed);
       setTravelResult(null);
     } catch {
       setError("Unexpected network error while generating the look.");
@@ -388,10 +437,10 @@ export default function AiLookClient() {
           </Card>
         )}
 
-        {activeMode === "single" && singleResult && !isSingleLoading && (
+        {activeMode === "single" && singleResult && primaryLook && !isSingleLoading && (
           <Card>
             <CardHeader>
-              <CardTitle>{singleResult.lookName}</CardTitle>
+              <CardTitle>{primaryLook.lookName}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-5">
               <Accordion type="single" collapsible className="w-full rounded-lg border border-amber-200 bg-amber-50 px-4">
@@ -401,7 +450,7 @@ export default function AiLookClient() {
                   </AccordionTrigger>
                   <AccordionContent className="space-y-2 text-sm text-slate-700">
                     <p>
-                      Confidence: {singleResult.confidence}% (match: {singleResult.matchScore}%, model: {singleResult.modelConfidence}%)
+                      Confidence: {primaryLook.confidence}% (match: {primaryLook.matchScore}%, model: {primaryLook.modelConfidence}%)
                     </p>
                     {singleResult.interpretedIntent && (
                       <p>
@@ -430,7 +479,7 @@ export default function AiLookClient() {
               <div>
                 <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">The Lineup</h3>
                 <div className="grid gap-3 md:grid-cols-2">
-                  {singleResult.lineup.map((garment) => (
+                  {primaryLook.lineup.map((garment) => (
                     <Link
                       key={garment.id}
                       href={`/garments/${garment.id}`}
@@ -459,7 +508,7 @@ export default function AiLookClient() {
 
               <div>
                 <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">Rationale</h3>
-                <p className="text-sm leading-6 text-slate-800">{singleResult.rationale}</p>
+                <p className="text-sm leading-6 text-slate-800">{primaryLook.rationale}</p>
               </div>
             </CardContent>
           </Card>
