@@ -96,6 +96,63 @@ const seasonWeatherMap: Record<SeasonFilter, string[]> = {
 const isSeasonFilter = (value: string | null): value is SeasonFilter =>
   value === 'winter' || value === 'summer' || value === 'fall' || value === 'spring';
 
+const inferHemisphereFromTimeZone = (timeZone: string): 'north' | 'south' => {
+  const normalized = timeZone.trim();
+  const southernHints = [
+    'Australia/',
+    'Antarctica/',
+    'America/Argentina',
+    'America/Asuncion',
+    'America/La_Paz',
+    'America/Montevideo',
+    'America/Punta_Arenas',
+    'America/Santiago',
+    'America/Sao_Paulo',
+    'Pacific/Auckland',
+    'Pacific/Chatham',
+    'Pacific/Fiji',
+    'Pacific/Norfolk',
+    'Pacific/Noumea',
+    'Pacific/Tongatapu',
+  ];
+
+  if (southernHints.some((hint) => normalized.startsWith(hint))) {
+    return 'south';
+  }
+
+  return 'north';
+};
+
+const inferSeasonFromMonth = (month: number, hemisphere: 'north' | 'south'): SeasonFilter => {
+  if (hemisphere === 'south') {
+    if (month === 12 || month === 1 || month === 2) return 'summer';
+    if (month >= 3 && month <= 5) return 'fall';
+    if (month >= 6 && month <= 8) return 'winter';
+    return 'spring';
+  }
+
+  if (month === 12 || month === 1 || month === 2) return 'winter';
+  if (month >= 3 && month <= 5) return 'spring';
+  if (month >= 6 && month <= 8) return 'summer';
+  return 'fall';
+};
+
+const getCurrentAutoSeason = (): SeasonFilter => {
+  const now = new Date();
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const monthValue = Number(
+    new Intl.DateTimeFormat('en-US', {
+      month: 'numeric',
+      timeZone,
+    }).format(now)
+  );
+  const safeMonth = Number.isInteger(monthValue) && monthValue >= 1 && monthValue <= 12
+    ? monthValue
+    : (now.getMonth() + 1);
+  const hemisphere = inferHemisphereFromTimeZone(timeZone);
+  return inferSeasonFromMonth(safeMonth, hemisphere);
+};
+
 const emptyFilters = (): Filters => ({
   brand: [],
   type: [],
@@ -247,6 +304,38 @@ export default function WardrobeViewerClient({
     return { filters, favorites, season };
   }, [searchParams]);
 
+  const updateUrl = useCallback((newFilters: Filters, newFavorites: boolean, newSeason: SeasonFilter | null) => {
+    const newSearchParams = new URLSearchParams();
+    (Object.entries(newFilters) as Array<[keyof Filters, string[]]>).forEach(([key, values]) => {
+      values.forEach((value) => newSearchParams.append(key, value));
+    });
+    if (newFavorites) {
+      newSearchParams.set('favorites', 'true');
+    }
+    if (newSeason) {
+      newSearchParams.set('season', newSeason);
+    }
+    const query = newSearchParams.toString();
+    router.push(query ? `${pathname}?${query}` : pathname);
+  }, [pathname, router]);
+
+  const applySeasonFilter = useCallback((season: SeasonFilter | null) => {
+    selectedSeasonRef.current = season;
+    setSelectedSeason(season);
+    updateUrl(selectedFiltersRef.current, showOnlyFavoritesRef.current, season);
+  }, [updateUrl]);
+
+  const handleApplyAutoSeason = useCallback(() => {
+    const currentSeason = getCurrentAutoSeason();
+    const nextSeason = selectedSeasonRef.current === currentSeason ? null : currentSeason;
+
+    applySeasonFilter(nextSeason);
+    setIsSearchOpen(false);
+    setSearchValue('');
+    setPaletteView('search');
+    setIsJsonCopied(false);
+  }, [applySeasonFilter]);
+
   useEffect(() => {
     selectedFiltersRef.current = selectedFilters;
   }, [selectedFilters]);
@@ -290,9 +379,17 @@ export default function WardrobeViewerClient({
 
     const handlePaletteShortcut = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (searchValue.trim().length > 0) return;
+      if (paletteView !== 'search') return;
+
+      if (event.key === 'S') {
+        event.preventDefault();
+        handleApplyAutoSeason();
+        return;
+      }
+
       // Export shortcut is uppercase "J" only.
       if (event.key !== 'J') return;
-      if (searchValue.trim().length > 0) return;
 
       event.preventDefault();
       setPaletteView('export-json');
@@ -300,7 +397,7 @@ export default function WardrobeViewerClient({
 
     window.addEventListener('keydown', handlePaletteShortcut);
     return () => window.removeEventListener('keydown', handlePaletteShortcut);
-  }, [isSearchOpen, searchValue]);
+  }, [handleApplyAutoSeason, isSearchOpen, paletteView, searchValue]);
 
   useEffect(() => {
     if (!isJsonCopied) return;
@@ -321,21 +418,6 @@ export default function WardrobeViewerClient({
   const toggleFilterDrawer = () => {
     setIsFilterDrawerOpen(!isFilterDrawerOpen);
   };
-
-  const updateUrl = useCallback((newFilters: Filters, newFavorites: boolean, newSeason: SeasonFilter | null) => {
-    const newSearchParams = new URLSearchParams();
-    (Object.entries(newFilters) as Array<[keyof Filters, string[]]>).forEach(([key, values]) => {
-      values.forEach((value) => newSearchParams.append(key, value));
-    });
-    if (newFavorites) {
-      newSearchParams.set('favorites', 'true');
-    }
-    if (newSeason) {
-      newSearchParams.set('season', newSeason);
-    }
-    const query = newSearchParams.toString();
-    router.push(query ? `${pathname}?${query}` : pathname);
-  }, [pathname, router]);
 
   const toggleShowOnlyFavorites = () => {
     const nextFavorites = !showOnlyFavoritesRef.current;
@@ -376,9 +458,7 @@ export default function WardrobeViewerClient({
 
   const handleSeasonToggle = (season: SeasonFilter) => {
     const nextSeason = selectedSeasonRef.current === season ? null : season;
-    selectedSeasonRef.current = nextSeason;
-    setSelectedSeason(nextSeason);
-    updateUrl(selectedFiltersRef.current, showOnlyFavoritesRef.current, nextSeason);
+    applySeasonFilter(nextSeason);
   };
 
   const filteredWardrobe = useMemo(() => {
@@ -429,6 +509,11 @@ export default function WardrobeViewerClient({
   }, [debouncedSearchValue, wardrobeData]);
 
   const showSearchThresholdHint = searchValue.trim().length > 0 && searchValue.trim().length < 2;
+  const currentAutoSeason = getCurrentAutoSeason();
+  const isAutoSeasonActive = selectedSeason === currentAutoSeason;
+  const autoSeasonActionLabel = isAutoSeasonActive
+    ? `Clear Season Clothes (Auto: ${currentAutoSeason})`
+    : `Season Clothes (Auto: ${currentAutoSeason})`;
   const wardrobeExportJson = useMemo(
     () => JSON.stringify(wardrobeData, null, 2),
     [wardrobeData]
@@ -527,6 +612,21 @@ export default function WardrobeViewerClient({
               <CommandEmpty>No garments found</CommandEmpty>
             )}
             <CommandGroup heading="Actions">
+              <CommandItem
+                value={autoSeasonActionLabel}
+                onSelect={() => handleApplyAutoSeason()}
+                className="py-2"
+              >
+                <div className="flex w-full items-center justify-between gap-3">
+                  <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                    <CloudSun className="size-4 shrink-0 text-gray-500" />
+                    <span className="truncate">{autoSeasonActionLabel}</span>
+                  </span>
+                  <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                    S
+                  </span>
+                </div>
+              </CommandItem>
               <CommandItem
                 value="Export Wardrobe as JSON"
                 onSelect={handleExportWardrobeJson}
