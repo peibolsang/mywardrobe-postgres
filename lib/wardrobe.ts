@@ -4,6 +4,8 @@ import { neon } from '@neondatabase/serverless';
 import { unstable_cache } from 'next/cache';
 import type { Garment } from '@/lib/types';
 
+const WARDROBE_CACHE_REVALIDATE_SECONDS = 300;
+
 const fetchWardrobeFromDb = async (): Promise<Garment[]> => {
   const sql = neon(`${process.env.DATABASE_URL}`);
   const garments = await sql`
@@ -47,6 +49,7 @@ const fetchWardrobeFromDb = async (): Promise<Garment[]> => {
 
 const getWardrobeCached = unstable_cache(fetchWardrobeFromDb, ['garments'], {
   tags: ['garments'],
+  revalidate: WARDROBE_CACHE_REVALIDATE_SECONDS,
 });
 
 export async function getWardrobeData(options?: { forceFresh?: boolean }): Promise<Garment[]> {

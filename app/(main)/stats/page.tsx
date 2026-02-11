@@ -5,6 +5,8 @@ import { getWardrobeData } from "@/lib/wardrobe";
 import schema from "@/public/schema.json";
 import { redirect } from "next/navigation";
 
+export const dynamic = "force-dynamic";
+
 type SchemaItems = {
   properties?: {
     suitable_weather?: { items?: { enum?: string[] } };
@@ -42,7 +44,7 @@ export default async function StatsPage() {
   let error: string | null = null;
 
   try {
-    wardrobeData = await getWardrobeData();
+    wardrobeData = await getWardrobeData({ forceFresh: true });
   } catch (e: any) {
     error = e.message;
     console.error("Error fetching wardrobe data:", e);

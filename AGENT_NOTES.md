@@ -94,3 +94,7 @@
 - CMDK export sizing fix: Export-result container had `max-h-[70vh]`, which made the dialog larger than normal search mode; changed to the same results cap (`max-h-[300px]`) as command list so palette dimensions stay consistent across views.
 - CMDK export polish: Converted export results panel to a fixed-height flex layout so textarea spacing at the bottom stays comfortable, and removed command-root focus outline to prevent transient gray border artifacts after executing export command.
 - CMDK shortcut refinement: Limited export keyboard shortcut to uppercase `J` only; lowercase `j` is no longer intercepted so it can be used as normal search input text.
+
+## 2026-02-11
+- Stats caching correction note: `/stats` previously consumed production `unstable_cache` data and could remain stale indefinitely when DB changes occurred outside server actions; fixed by forcing fresh reads in stats (`getWardrobeData({ forceFresh: true })`) and marking the route dynamic.
+- Cache resilience note: Added a 5-minute TTL (`revalidate: 300`) to shared `getWardrobeData()` production cache so viewer/API consumers self-heal from out-of-band DB updates even without explicit `revalidateTag`.

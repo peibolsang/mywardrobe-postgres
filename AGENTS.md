@@ -102,11 +102,12 @@ Use imperative commit subjects.
 
 ## Caching strategy: 
 - Shared wardrobe reads are centralized in `lib/wardrobe.ts` via `getWardrobeData()`.
-- In production, wardrobe reads use `unstable_cache` tagged as `garments`.
+- In production, shared wardrobe reads use `unstable_cache` tagged as `garments` with a 5-minute TTL (`revalidate: 300`) to self-heal from out-of-band DB updates.
 - In local development (`NODE_ENV=development`), wardrobe reads bypass cache and query the DB directly.
 - Mutations in `actions/garment.ts` (`createGarment`, `updateGarment`, `deleteGarment`) call `revalidateTag('garments')` for event-driven invalidation.
 - Editor flows always request fresh data (`/api/wardrobe?fresh=1` with `cache: 'no-store'`) to avoid stale edit state.
-- Viewer (`/viewer`) and stats (`/stats`) load wardrobe data through `getWardrobeData()` server-side.
+- Viewer (`/viewer`) loads wardrobe data through shared `getWardrobeData()` server-side cache.
+- Stats (`/stats`) forces a fresh DB read (`getWardrobeData({ forceFresh: true })`) and is configured as dynamic for accuracy-sensitive analytics.
 
 ## Vercel Postgres + Neon integration: 
 - code uses `DATABASE_URL` with `@neondatabase/serverless` (`lib/db.ts`, API routes, and actions). Auth persistence uses `Pool` + `@auth/neon-adapter` in `lib/auth.config.ts`
