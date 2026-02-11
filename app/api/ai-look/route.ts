@@ -79,6 +79,7 @@ interface CanonicalIntent {
 interface WeatherContext {
   locationLabel: string;
   summary: string;
+  weather: string[];
 }
 
 interface TravelDayWeather {
@@ -176,7 +177,6 @@ Output requirements:
 
 const WEATHER_TOOL_INPUT_SCHEMA = z.object({
   locationQuery: z.string().min(1).describe("Location query string, e.g. 'Aviles, Asturias, Spain'."),
-  dayReference: z.enum(["today", "tomorrow", "unspecified"]).describe("Day reference inferred from user request."),
 }).strict();
 
 const normalize = (value: unknown): string => String(value ?? "").trim();
@@ -195,18 +195,37 @@ const toCompactSentence = (value: string, maxLength: number): string => {
   return `${compact.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 };
 
-const summarizeMaterials = (materials: Garment["material_composition"]): string | null => {
-  const entries = (materials ?? [])
-    .map((entry) => ({
-      material: normalize(entry.material),
-      percentage: Number(entry.percentage ?? 0),
-    }))
-    .filter((entry) => entry.material.length > 0 && entry.percentage > 0)
-    .sort((left, right) => right.percentage - left.percentage)
-    .slice(0, 2);
+const toSentence = (value: string): string => {
+  const normalized = normalize(value).replace(/\s+/g, " ");
+  if (!normalized) return "";
+  return /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
+};
 
-  if (entries.length === 0) return null;
-  return entries.map((entry) => `${entry.material} ${Math.round(entry.percentage)}%`).join(", ");
+const summarizeWeatherContext = (weatherContext: string): string => {
+  const normalized = normalize(weatherContext);
+  if (!normalized) return "";
+
+  const locationMatch = normalized.match(/^Weather context for\s+([^:]+):/i);
+  const conditionsMatch = normalized.match(/Current conditions look\s+([^\.]+)\./i);
+  const rangeMatch = normalized.match(/Expected range\s+([^\.]+)\./i);
+  const currentTempMatch = normalized.match(/Current temperature\s+([^\.]+)\./i);
+
+  const location = normalize(locationMatch?.[1] ?? "");
+  const conditions = normalize(conditionsMatch?.[1] ?? "");
+  const range = normalize(rangeMatch?.[1] ?? "");
+  const currentTemp = normalize(currentTempMatch?.[1] ?? "");
+
+  const detailParts: string[] = [];
+  if (conditions) detailParts.push(conditions);
+  if (currentTemp) detailParts.push(`${currentTemp} now`);
+  if (range) detailParts.push(`range ${range}`);
+
+  if (detailParts.length === 0) {
+    return toSentence(`Current weather considered: ${normalized}`);
+  }
+
+  const lead = location ? `Current weather in ${location}` : "Current weather";
+  return toSentence(`${lead}: ${detailParts.join(", ")}`);
 };
 
 const buildAlignedRationale = ({
@@ -228,51 +247,54 @@ const buildAlignedRationale = ({
   const styleTags = intent.style.slice(0, 2);
 
   if (normalize(contextLabel)) contextParts.push(normalize(contextLabel));
-  if (places.length > 0) contextParts.push(`places like ${joinNaturalList(places)}`);
-  if (occasions.length > 0) contextParts.push(`occasions like ${joinNaturalList(occasions)}`);
-  if (weatherTags.length > 0) contextParts.push(`${joinNaturalList(weatherTags)} weather`);
-  if (timeTags.length > 0) contextParts.push(`${joinNaturalList(timeTags)} timing`);
-  if (intent.formality) contextParts.push(`${intent.formality} formality`);
-  if (styleTags.length > 0) contextParts.push(`${joinNaturalList(styleTags)} style cues`);
+  if (places.length > 0) contextParts.push(`${joinNaturalList(places)} settings`);
+  if (occasions.length > 0) contextParts.push(`${joinNaturalList(occasions)} moments`);
 
   const openingSentence = contextParts.length > 0
-    ? `This look is tuned for ${contextParts.join(", ")}.`
-    : "This look is tuned to your request.";
+    ? toSentence(`This recommendation is built for ${contextParts.join(", ")}`)
+    : "This recommendation is built around your request and daily context.";
 
-  const lineupSentence = lineupGarments.length > 0
-    ? `Final lineup: ${lineupGarments.map((garment) => {
-        const label = [normalize(garment.brand), normalize(garment.model)].filter(Boolean).join(" ").trim() || normalize(garment.type) || "garment";
-        const details: string[] = [];
-        const typeText = normalize(garment.type);
-        if (typeText) details.push(typeText);
-        const materials = summarizeMaterials(garment.material_composition);
-        if (materials) details.push(materials);
-        const featureSnippet = toCompactSentence(garment.features, 90);
-        if (featureSnippet) details.push(featureSnippet);
-        return details.length > 0 ? `${label} (${details.join("; ")})` : label;
-      }).join("; ")}.`
-    : "";
+  const dayFlowParts: string[] = [];
+  if (timeTags.length > 0) dayFlowParts.push(`${joinNaturalList(timeTags)} wear`);
+  if (places.length > 0) dayFlowParts.push(`environments like ${joinNaturalList(places)}`);
+  if (occasions.length > 0) dayFlowParts.push(`${joinNaturalList(occasions)} activities`);
+  const dayFlowSentence = dayFlowParts.length > 0
+    ? toSentence(`It is tuned for ${dayFlowParts.join(", ")}, balancing comfort and polish as your day shifts`)
+    : "It is tuned for day-to-day transitions, balancing comfort and polish without feeling overworked.";
+
+  const stylingParts: string[] = [];
+  if (intent.formality) stylingParts.push(`${intent.formality.toLowerCase()} formality`);
+  if (styleTags.length > 0) stylingParts.push(`${joinNaturalList(styleTags)} style cues`);
+  const stylingSentence = stylingParts.length > 0
+    ? toSentence(`The styling direction stays consistent with ${stylingParts.join(" and ")}, so the overall impression feels intentional but easy`)
+    : "The styling direction stays clean and versatile so the final look feels intentional but easy.";
 
   const normalizedWeatherContext = normalize(weatherContext);
   const weatherSentence = normalizedWeatherContext
-    ? `Weather considered: ${toCompactSentence(normalizedWeatherContext, 180)}`
+    ? summarizeWeatherContext(normalizedWeatherContext)
+    : weatherTags.length > 0
+      ? toSentence(`Weather support is aligned to ${joinNaturalList(weatherTags)} conditions to keep the outfit practical`)
+      : "Weather cues are limited, so the look favors adaptable layering and all-day comfort.";
+
+  const normalizedNotes = normalize(intent.notes)
+    .replace(/\b(current\s+)?weather\s+(resolved|considered)[^.]*\.?/gi, "")
+    .replace(/\bweather data[^.]*unavailable[^.]*\.?/gi, "")
+    .replace(/\bweather data[^.]*not available[^.]*\.?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  const notesSentence = normalizedNotes
+    ? toSentence(`${normalizedNotes}`)
     : "";
 
-  const notesSentence = normalize(intent.notes)
-    ? `Intent focus: ${toCompactSentence(intent.notes, 180)}`
+  const cohesionSentence = lineupGarments.length > 0
+    ? "Overall, the lineup stays cohesive and practical, with enough flexibility for real-world use while still matching the requested intent."
     : "";
 
-  return [openingSentence, weatherSentence, lineupSentence, notesSentence]
+  return [openingSentence, dayFlowSentence, stylingSentence, weatherSentence, notesSentence, cohesionSentence]
     .filter(Boolean)
     .join(" ")
     .trim();
-};
-
-const inferDayReferenceFromPrompt = (prompt: string): "today" | "tomorrow" | "unspecified" => {
-  const lower = prompt.toLowerCase();
-  if (/\btomorrow\b/.test(lower)) return "tomorrow";
-  if (/\btoday\b|\btonight\b|\bnow\b/.test(lower)) return "today";
-  return "unspecified";
 };
 
 const extractLocationHintFromPrompt = (prompt: string): string | null => {
@@ -302,7 +324,7 @@ const weatherCodeToText = (code: number | null | undefined): string => {
   return "variable conditions";
 };
 
-async function fetchWeatherContext(locationQuery: string, dayReference: "today" | "tomorrow" | "unspecified"): Promise<WeatherContext | null> {
+async function fetchWeatherContext(locationQuery: string): Promise<WeatherContext | null> {
   const query = normalize(locationQuery);
   if (!query) return null;
 
@@ -332,51 +354,6 @@ async function fetchWeatherContext(locationQuery: string, dayReference: "today" 
   let dayHumidity: number | undefined = currentJson.main?.humidity;
   let dayWindMs: number | undefined = currentJson.wind?.speed;
 
-  if (dayReference === "tomorrow") {
-    const forecastUrl = new URL("https://api.openweathermap.org/data/2.5/forecast");
-    forecastUrl.searchParams.set("q", query);
-    forecastUrl.searchParams.set("units", "metric");
-    forecastUrl.searchParams.set("appid", apiKey);
-
-    const forecastResponse = await fetch(forecastUrl.toString(), { cache: "no-store" });
-    if (forecastResponse.ok) {
-      const forecastJson = await forecastResponse.json() as {
-        list?: Array<{
-          dt?: number;
-          weather?: Array<{ description?: string }>;
-          main?: { temp_min?: number; temp_max?: number; humidity?: number };
-          wind?: { speed?: number };
-        }>;
-      };
-
-      const now = new Date();
-      const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
-      const tomorrowKey = tomorrow.toISOString().slice(0, 10);
-      const tomorrowEntries = (forecastJson.list ?? []).filter((entry) => {
-        if (!entry.dt) return false;
-        const key = new Date(entry.dt * 1000).toISOString().slice(0, 10);
-        return key === tomorrowKey;
-      });
-
-      if (tomorrowEntries.length > 0) {
-        const descriptions = tomorrowEntries
-          .map((entry) => normalize(entry.weather?.[0]?.description))
-          .filter(Boolean);
-        dayDescription = descriptions[0] || dayDescription;
-
-        const mins = tomorrowEntries.map((entry) => entry.main?.temp_min).filter((v): v is number => typeof v === "number");
-        const maxs = tomorrowEntries.map((entry) => entry.main?.temp_max).filter((v): v is number => typeof v === "number");
-        const humidities = tomorrowEntries.map((entry) => entry.main?.humidity).filter((v): v is number => typeof v === "number");
-        const winds = tomorrowEntries.map((entry) => entry.wind?.speed).filter((v): v is number => typeof v === "number");
-
-        if (mins.length > 0) dayTempMin = Math.min(...mins);
-        if (maxs.length > 0) dayTempMax = Math.max(...maxs);
-        if (humidities.length > 0) dayHumidity = Math.round(humidities.reduce((a, b) => a + b, 0) / humidities.length);
-        if (winds.length > 0) dayWindMs = Math.round((winds.reduce((a, b) => a + b, 0) / winds.length) * 10) / 10;
-      }
-    }
-  }
-
   const locationLabel = [normalize(currentJson.name), normalize(currentJson.sys?.country)].filter(Boolean).join(", ") || query;
   const currentTemp = currentJson.main?.temp;
   const currentFeelsLike = currentJson.main?.feels_like;
@@ -384,7 +361,7 @@ async function fetchWeatherContext(locationQuery: string, dayReference: "today" 
 
   const summary = [
     `Weather context for ${locationLabel}:`,
-    `${dayReference === "tomorrow" ? "Tomorrow" : "Today"} looks ${dayDescription || "variable"}.`,
+    `Current conditions look ${dayDescription || "variable"}.`,
     typeof dayTempMin === "number" && typeof dayTempMax === "number" ? `Expected range ${Math.round(dayTempMin)}-${Math.round(dayTempMax)}°C.` : "",
     typeof currentTemp === "number" ? `Current temperature ${Math.round(currentTemp)}°C.` : "",
     typeof currentFeelsLike === "number" ? `Feels like ${Math.round(currentFeelsLike)}°C.` : "",
@@ -392,7 +369,11 @@ async function fetchWeatherContext(locationQuery: string, dayReference: "today" 
     typeof windKmh === "number" ? `Wind ${Math.round(windKmh)} km/h.` : "",
   ].filter(Boolean).join(" ");
 
-  return { locationLabel, summary };
+  const weather = typeof dayTempMin === "number" && typeof dayTempMax === "number"
+    ? dedupeCanonicalWeather(inferCanonicalWeatherFromTemperature(dayTempMin, dayTempMax))
+    : [];
+
+  return { locationLabel, summary, weather };
 }
 
 const parseIsoDate = (value: string): Date | null => {
@@ -1614,7 +1595,7 @@ export async function POST(request: Request) {
             output: Output.object({
               schema: intentSchema,
             }),
-            temperature: 0,
+            temperature: 0.3,
             system: INTERPRETER_APPENDIX,
             prompt: [
               `Canonical options:\n${JSON.stringify(canonicalOptions)}`,
@@ -1706,7 +1687,7 @@ export async function POST(request: Request) {
           const { object } = await generateObject({
             model: openai("gpt-4.1-mini"),
             schema: travelDayRecommendationSchema,
-            temperature: 0.35,
+            temperature: 0.7,
             system: `${systemPrompt}\n\n${RECOMMENDER_APPENDIX}`,
             prompt: [
               `Travel plan for ${weatherByDate.locationLabel}.`,
@@ -2102,18 +2083,19 @@ export async function POST(request: Request) {
         getWeatherByLocation: tool({
           description: "Fetch weather summary for a location. Use when user mentions a city, region, country, or place.",
           inputSchema: WEATHER_TOOL_INPUT_SCHEMA,
-          execute: async ({ locationQuery, dayReference }) => {
-            const weather = await fetchWeatherContext(locationQuery, dayReference);
+          execute: async ({ locationQuery }) => {
+            const weather = await fetchWeatherContext(locationQuery);
             return {
               found: Boolean(weather),
               locationLabel: weather?.locationLabel ?? "",
               summary: weather?.summary ?? "",
+              weather: weather?.weather ?? [],
             };
           },
         }),
       },
       stopWhen: stepCountIs(6),
-      temperature: 0.8,
+      temperature: 0.3,
       system: INTERPRETER_APPENDIX,
       prompt: `Canonical options:\n${JSON.stringify(canonicalOptions)}\n\nUser request:\n${userPrompt}`,
     });
@@ -2124,9 +2106,10 @@ export async function POST(request: Request) {
       .find((result) => result.type === "tool-result" && result.toolName === "getWeatherByLocation");
     const weatherOutput =
       latestWeatherToolResult && typeof latestWeatherToolResult.output === "object" && latestWeatherToolResult.output
-        ? latestWeatherToolResult.output as { summary?: string }
+        ? latestWeatherToolResult.output as { summary?: string; weather?: string[] }
         : null;
     let weatherContextSummary = normalize(weatherOutput?.summary);
+    let resolvedWeatherTags = dedupeCanonicalWeather(weatherOutput?.weather ?? []);
     let weatherStatus: WeatherContextStatus = "not_requested";
 
     // Fallback: if first pass skipped tool call, force one when a location hint exists.
@@ -2137,26 +2120,26 @@ export async function POST(request: Request) {
 
     if (!weatherContextSummary) {
       if (locationHint) {
-        const dayReference = inferDayReferenceFromPrompt(userPrompt);
         const fallbackWeather = await generateText({
           model: openai("gpt-4.1-mini"),
           tools: {
             getWeatherByLocation: tool({
               description: "Fetch weather summary for a location.",
               inputSchema: WEATHER_TOOL_INPUT_SCHEMA,
-              execute: async ({ locationQuery, dayReference }) => {
-                const weather = await fetchWeatherContext(locationQuery, dayReference);
+              execute: async ({ locationQuery }) => {
+                const weather = await fetchWeatherContext(locationQuery);
                 return {
                   found: Boolean(weather),
                   locationLabel: weather?.locationLabel ?? "",
                   summary: weather?.summary ?? "",
+                  weather: weather?.weather ?? [],
                 };
               },
             }),
           },
           toolChoice: { type: "tool", toolName: "getWeatherByLocation" },
           stopWhen: stepCountIs(2),
-          prompt: `Get weather for location "${locationHint}" with dayReference "${dayReference}".`,
+          prompt: `Get current weather for location "${locationHint}".`,
         });
 
         const fallbackToolResult = [...fallbackWeather.toolResults]
@@ -2164,17 +2147,25 @@ export async function POST(request: Request) {
           .find((result) => result.type === "tool-result" && result.toolName === "getWeatherByLocation");
         const fallbackOutput =
           fallbackToolResult && typeof fallbackToolResult.output === "object" && fallbackToolResult.output
-            ? fallbackToolResult.output as { summary?: string }
+            ? fallbackToolResult.output as { summary?: string; weather?: string[] }
             : null;
         weatherContextSummary = normalize(fallbackOutput?.summary);
+        const fallbackWeatherTags = dedupeCanonicalWeather(fallbackOutput?.weather ?? []);
+        if (fallbackWeatherTags.length > 0) {
+          resolvedWeatherTags = fallbackWeatherTags;
+        }
       }
     }
 
     // Final fallback: deterministic server-side fetch if tool path returned no weather.
     if (!weatherContextSummary && locationHint) {
       try {
-        const directWeather = await fetchWeatherContext(locationHint, inferDayReferenceFromPrompt(userPrompt));
+        const directWeather = await fetchWeatherContext(locationHint);
         weatherContextSummary = normalize(directWeather?.summary);
+        const directWeatherTags = dedupeCanonicalWeather(directWeather?.weather ?? []);
+        if (directWeatherTags.length > 0) {
+          resolvedWeatherTags = directWeatherTags;
+        }
       } catch (error) {
         console.warn("Direct weather fallback failed:", error);
       }
@@ -2186,21 +2177,32 @@ export async function POST(request: Request) {
       weatherStatus = "failed";
     }
 
+    const interpretedWeather = toCanonicalValues(interpreted.weather, WEATHER_OPTIONS);
+    const canonicalWeather = resolvedWeatherTags.length > 0 ? resolvedWeatherTags : interpretedWeather;
+    const interpretedNotes = normalize(interpreted.notes);
+    const withoutUnavailableWeatherClaim = interpretedNotes
+      .replace(/weather data[^.]*unavailable[^.]*\.?/i, "")
+      .replace(/weather data[^.]*not available[^.]*\.?/i, "")
+      .replace(/(current\s+)?weather\s+resolved[^.]*\.?/i, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+    const canonicalNotes = withoutUnavailableWeatherClaim || interpretedNotes;
+
     const canonicalIntent: CanonicalIntent = {
-      weather: toCanonicalValues(interpreted.weather, WEATHER_OPTIONS),
+      weather: canonicalWeather,
       occasion: toCanonicalValues(interpreted.occasion, OCCASION_OPTIONS),
       place: toCanonicalValues(interpreted.place, PLACE_OPTIONS),
       timeOfDay: toCanonicalValues(interpreted.timeOfDay, TIME_OPTIONS),
       formality: toCanonicalSingle(interpreted.formality ?? null, FORMALITY_OPTIONS),
       style: toCanonicalValues(interpreted.style, STYLE_OPTIONS),
-      notes: normalize(interpreted.notes),
+      notes: canonicalNotes,
     };
     console.info("[ai-look][single][step-1][canonical-intent]", JSON.stringify(canonicalIntent));
 
     const { object } = await generateObject({
       model: openai("gpt-4.1-mini"),
       schema: recommendationSchema,
-      temperature: 0.2,
+      temperature: 0.7,
       system: `${systemPrompt}\n\n${RECOMMENDER_APPENDIX}`,
       prompt: `User request:\n${userPrompt}\n\nCanonical interpreted intent:\n${JSON.stringify(canonicalIntent)}\n\n${weatherContextSummary || "No external weather context available."}\n\nWardrobe JSON:\n${JSON.stringify(compactWardrobe)}`,
     });
