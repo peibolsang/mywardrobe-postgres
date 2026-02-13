@@ -126,3 +126,15 @@
 - Command palette visual note: Added consistent leading icons across viewer and garment CMDK action items while keeping right-side shortcut chips, improving scanability without changing command semantics.
 - Viewer CMDK automation note: Added `Season Clothes (Auto)` action (plus uppercase `S` shortcut when search input is empty) that infers season from browser date/time/timezone and applies the existing `season` URL filter, preserving current favorites and other selected filters.
 - Viewer CMDK toggle UX note: Auto-season action label is now dynamic by state (`Season Clothes (Auto: <season>)` vs `Clear Season Clothes (Auto: <season>)`) and matches toggle behavior for the current inferred season.
+
+## 2026-02-13
+- Context: Single-look AI logs showed Step-1 interpreted notes claiming weather unavailable while final rationale displayed live weather for the same request.
+- What went right: Traced the full single-mode flow and confirmed weather can be resolved after interpretation via forced tool call/direct fallback, which explained the contradictory outputs.
+- What went wrong: Canonical note cleanup used `cleaned || interpreted`, which reintroduced the unavailable-weather sentence whenever cleanup removed the entire note.
+- Correction applied: Canonical notes now reconcile with resolved weather state (when weather context exists, unavailable-status claims are removed without falling back to contradictory text).
+- Reliability note: Added normalized weather-query variants (including parenthetical-location cleanup) before OpenWeather lookup, improving hit rate for prompts like `Aviles, Asturias (Spain)`.
+- Observability note: Added explicit single-look weather-resolution logging (`weatherStatus`, `weatherContextSource`, location hint, resolved weather tags) to make tool/fallback behavior auditable in server logs.
+- Constraint-hardening note: AI Look now hard-blocks weather-incompatible garments across both single and travel modes by enforcing per-garment weather compatibility in normalization, candidate replacement, day eligibility filters, and final day-violation checks; if required silhouette categories are unavailable under the resolved weather tags, the API returns a clear 422 instead of silently selecting mismatched pieces.
+- Prompt curation note: Added Albert Muzquiz as a fourth expert persona in `app/api/ai-look/prompt.md` to expand panel-style guidance while preserving existing system prompt structure.
+- Material-intent rule note: Added deterministic material-composition scoring tied to weather/place/occasion/time across single and travel flows (selection, normalization, and confidence scoring), and reinforced it in prompt instructions so final recommendations account for material fit beyond tag overlap.
+- Intent-architecture note: Refactored Step 1 intent interpretation to context-only (`weather`, `occasion`, `place`, `timeOfDay`, `notes`) and moved `formality`/`style` into deterministic server-side derivation from those context dimensions (single + travel), ensuring consistent context → styling causality.

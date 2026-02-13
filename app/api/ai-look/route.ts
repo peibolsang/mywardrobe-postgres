@@ -26,13 +26,11 @@ const travelRequestSchema = z.object({
   reason: z.enum(["Vacation", "Office", "Customer visit"]),
 });
 
-const intentSchema = z.object({
+const contextIntentSchema = z.object({
   weather: z.array(z.string()).max(4),
   occasion: z.array(z.string()).max(4),
   place: z.array(z.string()).max(4),
   timeOfDay: z.array(z.string()).max(3),
-  formality: z.string().nullable(),
-  style: z.array(z.string()).max(4),
   notes: z.string(),
 }).strict();
 
@@ -82,6 +80,14 @@ interface CanonicalIntent {
   notes: string;
 }
 
+interface ContextIntent {
+  weather: string[];
+  occasion: string[];
+  place: string[];
+  timeOfDay: string[];
+  notes: string;
+}
+
 interface WeatherContext {
   locationLabel: string;
   summary: string;
@@ -96,8 +102,6 @@ interface TravelDayWeather {
 }
 
 interface TravelReasonIntent {
-  style: string[];
-  formality: string | null;
   occasion: string[];
   place: string[];
   notes: string;
@@ -144,6 +148,12 @@ type WeatherContextStatus =
   | "fetched"
   | "failed";
 
+type WeatherContextSource =
+  | "none"
+  | "model_tool"
+  | "forced_tool"
+  | "direct_fetch";
+
 type InMemoryRateLimitState = {
   count: number;
   windowStart: number;
@@ -169,11 +179,13 @@ const FORMALITY_OPTIONS = SCHEMA_ITEMS.properties?.formality?.enum ?? [];
 
 const INTERPRETER_APPENDIX = `
 You are the intent interpreter for a wardrobe stylist.
-Map natural language to canonical wardrobe filters.
+Map natural language to canonical context filters.
 
 Rules:
 - Use only canonical values from the provided option lists.
 - If the user mentions a city/region/country/place, call the tool getWeatherByLocation.
+- Return only context dimensions: weather, occasion, place, and timeOfDay (plus concise notes).
+- Do not infer or output style/formality directly; those are derived server-side from context.
 - Infer nearest canonical match for free text (examples):
   - "comfy", "cozy", "relaxed" -> casual social / low-key / informal leaning.
   - "edgy" -> darker, contrasty styling; often evening/night leaning.
@@ -242,6 +254,38 @@ const toSentence = (value: string): string => {
   const normalized = normalize(value).replace(/\s+/g, " ");
   if (!normalized) return "";
   return /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
+};
+
+const stripWeatherStatusClaims = (value: string): string =>
+  normalize(value)
+    .replace(/\b(current\s+)?weather\s+(resolved|considered)[^.]*\.?/gi, "")
+    .replace(/\bweather(?:\s+data)?[^.]*\b(unavailable|not\s+available|not\s+found|failed|could\s+not\s+be\s+(?:retrieved|resolved))\b[^.]*\.?/gi, "")
+    .replace(/\bassuming[^.]*weather[^.]*\.?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+const buildWeatherLocationQueryVariants = (locationQuery: string): string[] => {
+  const base = normalize(locationQuery).replace(/\s+/g, " ").trim();
+  if (!base) return [];
+
+  const variants: string[] = [];
+  const pushVariant = (candidate: string) => {
+    const normalizedCandidate = normalize(candidate)
+      .replace(/\s+,/g, ",")
+      .replace(/,\s*,+/g, ", ")
+      .replace(/\s{2,}/g, " ")
+      .replace(/^[,\-\s]+|[,\-\s]+$/g, "")
+      .trim();
+    if (!normalizedCandidate) return;
+    if (variants.some((item) => item.toLowerCase() === normalizedCandidate.toLowerCase())) return;
+    variants.push(normalizedCandidate);
+  };
+
+  pushVariant(base);
+  pushVariant(base.replace(/\(([^)]+)\)/g, ", $1"));
+  pushVariant(base.replace(/\([^)]*\)/g, ""));
+
+  return variants.slice(0, 3);
 };
 
 const summarizeWeatherContext = (weatherContext: string): string => {
@@ -319,14 +363,7 @@ const buildAlignedRationale = ({
       ? toSentence(`Weather support is aligned to ${joinNaturalList(weatherTags)} conditions to keep the outfit practical`)
       : "Weather cues are limited, so the look favors adaptable layering and all-day comfort.";
 
-  let normalizedNotes = normalize(intent.notes)
-    .replace(/\b(current\s+)?weather\s+(resolved|considered)[^.]*\.?/gi, "")
-    .replace(/\bweather data[^.]*unavailable[^.]*\.?/gi, "")
-    .replace(/\bweather data[^.]*not available[^.]*\.?/gi, "")
-    .replace(/\bweather data[^.]*not found[^.]*\.?/gi, "")
-    .replace(/\bassuming[^.]*weather[^.]*\.?/gi, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  let normalizedNotes = stripWeatherStatusClaims(intent.notes);
 
   if (normalizedWeatherContext) {
     normalizedNotes = stripWeatherNotes(normalizedNotes);
@@ -374,55 +411,59 @@ const weatherCodeToText = (code: number | null | undefined): string => {
 };
 
 async function fetchWeatherContext(locationQuery: string): Promise<WeatherContext | null> {
-  const query = normalize(locationQuery);
-  if (!query) return null;
+  const queryVariants = buildWeatherLocationQueryVariants(locationQuery);
+  if (queryVariants.length === 0) return null;
 
   const apiKey = process.env.OPENWEATHER_API_KEY;
   if (!apiKey) return null;
 
-  const currentUrl = new URL("https://api.openweathermap.org/data/2.5/weather");
-  currentUrl.searchParams.set("q", query);
-  currentUrl.searchParams.set("units", "metric");
-  currentUrl.searchParams.set("appid", apiKey);
+  for (const query of queryVariants) {
+    const currentUrl = new URL("https://api.openweathermap.org/data/2.5/weather");
+    currentUrl.searchParams.set("q", query);
+    currentUrl.searchParams.set("units", "metric");
+    currentUrl.searchParams.set("appid", apiKey);
 
-  const currentResponse = await fetch(currentUrl.toString(), { cache: "no-store" });
-  if (!currentResponse.ok) return null;
+    const currentResponse = await fetch(currentUrl.toString(), { cache: "no-store" });
+    if (!currentResponse.ok) continue;
 
-  const currentJson = await currentResponse.json() as {
-    name?: string;
-    sys?: { country?: string };
-    dt?: number;
-    weather?: Array<{ description?: string }>;
-    main?: { temp?: number; feels_like?: number; temp_min?: number; temp_max?: number; humidity?: number };
-    wind?: { speed?: number };
-  };
+    const currentJson = await currentResponse.json() as {
+      name?: string;
+      sys?: { country?: string };
+      dt?: number;
+      weather?: Array<{ description?: string }>;
+      main?: { temp?: number; feels_like?: number; temp_min?: number; temp_max?: number; humidity?: number };
+      wind?: { speed?: number };
+    };
 
-  let dayDescription = normalize(currentJson.weather?.[0]?.description);
-  let dayTempMin = currentJson.main?.temp_min;
-  let dayTempMax = currentJson.main?.temp_max;
-  let dayHumidity: number | undefined = currentJson.main?.humidity;
-  let dayWindMs: number | undefined = currentJson.wind?.speed;
+    const dayDescription = normalize(currentJson.weather?.[0]?.description);
+    const dayTempMin = currentJson.main?.temp_min;
+    const dayTempMax = currentJson.main?.temp_max;
+    const dayHumidity: number | undefined = currentJson.main?.humidity;
+    const dayWindMs: number | undefined = currentJson.wind?.speed;
 
-  const locationLabel = [normalize(currentJson.name), normalize(currentJson.sys?.country)].filter(Boolean).join(", ") || query;
-  const currentTemp = currentJson.main?.temp;
-  const currentFeelsLike = currentJson.main?.feels_like;
-  const windKmh = typeof dayWindMs === "number" ? dayWindMs * 3.6 : null;
+    const locationLabel = [normalize(currentJson.name), normalize(currentJson.sys?.country)].filter(Boolean).join(", ") || query;
+    const currentTemp = currentJson.main?.temp;
+    const currentFeelsLike = currentJson.main?.feels_like;
+    const windKmh = typeof dayWindMs === "number" ? dayWindMs * 3.6 : null;
 
-  const summary = [
-    `Weather context for ${locationLabel}:`,
-    `Current conditions look ${dayDescription || "variable"}.`,
-    typeof dayTempMin === "number" && typeof dayTempMax === "number" ? `Expected range ${Math.round(dayTempMin)}-${Math.round(dayTempMax)}°C.` : "",
-    typeof currentTemp === "number" ? `Current temperature ${Math.round(currentTemp)}°C.` : "",
-    typeof currentFeelsLike === "number" ? `Feels like ${Math.round(currentFeelsLike)}°C.` : "",
-    typeof dayHumidity === "number" ? `Humidity ${Math.round(dayHumidity)}%.` : "",
-    typeof windKmh === "number" ? `Wind ${Math.round(windKmh)} km/h.` : "",
-  ].filter(Boolean).join(" ");
+    const summary = [
+      `Weather context for ${locationLabel}:`,
+      `Current conditions look ${dayDescription || "variable"}.`,
+      typeof dayTempMin === "number" && typeof dayTempMax === "number" ? `Expected range ${Math.round(dayTempMin)}-${Math.round(dayTempMax)}°C.` : "",
+      typeof currentTemp === "number" ? `Current temperature ${Math.round(currentTemp)}°C.` : "",
+      typeof currentFeelsLike === "number" ? `Feels like ${Math.round(currentFeelsLike)}°C.` : "",
+      typeof dayHumidity === "number" ? `Humidity ${Math.round(dayHumidity)}%.` : "",
+      typeof windKmh === "number" ? `Wind ${Math.round(windKmh)} km/h.` : "",
+    ].filter(Boolean).join(" ");
 
-  const weather = typeof dayTempMin === "number" && typeof dayTempMax === "number"
-    ? dedupeCanonicalWeather(inferCanonicalWeatherFromTemperature(dayTempMin, dayTempMax))
-    : [];
+    const weather = typeof dayTempMin === "number" && typeof dayTempMax === "number"
+      ? dedupeCanonicalWeather(inferCanonicalWeatherFromTemperature(dayTempMin, dayTempMax))
+      : [];
 
-  return { locationLabel, summary, weather };
+    return { locationLabel, summary, weather };
+  }
+
+  return null;
 }
 
 const parseIsoDate = (value: string): Date | null => {
@@ -699,8 +740,6 @@ const findCanonicalOption = (options: string[], desired: string): string | null 
 const resolveTravelReasonIntent = (reason: "Vacation" | "Office" | "Customer visit"): TravelReasonIntent => {
   if (reason === "Vacation") {
     return {
-      style: [findCanonicalOption(STYLE_OPTIONS, "outdoorsy"), findCanonicalOption(STYLE_OPTIONS, "classic")].filter((v): v is string => Boolean(v)),
-      formality: findCanonicalOption(FORMALITY_OPTIONS, "Casual"),
       occasion: [findCanonicalOption(OCCASION_OPTIONS, "Casual Social"), findCanonicalOption(OCCASION_OPTIONS, "Errands / Low-Key Social")].filter((v): v is string => Boolean(v)),
       place: [],
       notes: "Vacation intent: prioritize comfort, climate adaptability, and easy day-to-night transitions.",
@@ -716,12 +755,6 @@ const resolveTravelReasonIntent = (reason: "Vacation" | "Office" | "Customer vis
     const dateNightOccasion = findCanonicalOption(OCCASION_OPTIONS, "Date Night / Intimate Dinner");
     const outdoorSocialOccasion = findCanonicalOption(OCCASION_OPTIONS, "Outdoor Social / Garden Party");
     return {
-      style: [
-        findCanonicalOption(STYLE_OPTIONS, "minimalist"),
-        findCanonicalOption(STYLE_OPTIONS, "vintage"),
-        findCanonicalOption(STYLE_OPTIONS, "classic"),
-      ].filter((v): v is string => Boolean(v)),
-      formality: findCanonicalOption(FORMALITY_OPTIONS, "Elevated Casual") ?? findCanonicalOption(FORMALITY_OPTIONS, "Business Casual"),
       occasion: [casualSocialOccasion, dateNightOccasion, outdoorSocialOccasion].filter((v): v is string => Boolean(v)),
       place: [officePlace, workshopPlace, atelierPlace, cityPlace].filter((v): v is string => Boolean(v)),
       notes: "Office intent: favor elevated smart-casual combinations with polished, versatile silhouettes.",
@@ -729,8 +762,6 @@ const resolveTravelReasonIntent = (reason: "Vacation" | "Office" | "Customer vis
   }
 
   return {
-    style: [findCanonicalOption(STYLE_OPTIONS, "classic"), findCanonicalOption(STYLE_OPTIONS, "minimalist")].filter((v): v is string => Boolean(v)),
-    formality: findCanonicalOption(FORMALITY_OPTIONS, "Business Formal") ?? findCanonicalOption(FORMALITY_OPTIONS, "Business Casual"),
     occasion: [findCanonicalOption(OCCASION_OPTIONS, "Business Formal")].filter((v): v is string => Boolean(v)),
     place: [findCanonicalOption(PLACE_OPTIONS, "Office / Boardroom")].filter((v): v is string => Boolean(v)),
     notes: "Customer visit intent: prioritize trust-building, polished, business-facing combinations.",
@@ -753,12 +784,6 @@ const toCanonicalValues = (values: string[] | undefined, allowed: string[]): str
   }
 
   return resolved;
-};
-
-const toCanonicalSingle = (value: string | null | undefined, allowed: string[]): string | null => {
-  const normalized = normalize(value).toLowerCase();
-  if (!normalized) return null;
-  return allowed.find((candidate) => candidate.toLowerCase() === normalized) ?? null;
 };
 
 const categorizeType = (type: string): "top" | "outerwear" | "bottom" | "footwear" | "other" => {
@@ -849,12 +874,368 @@ const hasCoreSilhouetteFromIds = (
 ): boolean =>
   missingCoreSilhouetteCategoriesFromIds(ids, garmentCategoryById, requiredCategories).length === 0;
 
+const matchesWeatherIntent = (garmentValues: string[] | undefined, requiredWeather: string[]): boolean => {
+  if (requiredWeather.length === 0) return true;
+  return Boolean(intersectionMatches(garmentValues ?? [], requiredWeather, { allSeasonAlias: "all season" }));
+};
+
+const missingWeatherCompatibleCategoriesFromWardrobe = (
+  wardrobe: Array<{ type: string; suitable_weather?: string[] }>,
+  requiredWeather: string[],
+  requiredCategories: GarmentCategory[] = CORE_SILHOUETTE_CATEGORIES
+): GarmentCategory[] => {
+  if (requiredWeather.length === 0) return [];
+  const present = new Set(
+    wardrobe
+      .filter((garment) => matchesWeatherIntent(garment.suitable_weather ?? [], requiredWeather))
+      .map((garment) => categorizeType(garment.type))
+  );
+  return requiredCategories.filter((category) => !present.has(category));
+};
+
+const MATERIAL_KEYWORD_BUCKETS = {
+  breathable: ["linen", "cotton", "hemp", "ramie", "lyocell", "tencel", "viscose", "rayon"],
+  insulating: ["wool", "merino", "cashmere", "alpaca", "mohair", "fleece", "flannel", "down", "corduroy"],
+  technical: ["nylon", "polyester", "polyamide", "gore", "shell", "membrane", "elastane", "spandex", "neoprene"],
+  refined: ["wool", "cashmere", "silk", "linen", "merino", "mohair", "suede"],
+  rugged: ["canvas", "denim", "twill", "leather", "cordura", "ripstop"],
+  absorbent: ["cotton", "linen", "suede", "viscose", "rayon"],
+} as const;
+
+type MaterialBucket = keyof typeof MATERIAL_KEYWORD_BUCKETS;
+
+const inferWetConditions = (weatherContext?: string | null): boolean => {
+  const text = normalize(weatherContext).toLowerCase();
+  if (!text) return false;
+  return /\b(rain|drizzle|shower|storm|thunder|snow|sleet|hail|precipitation|wet)\b/.test(text);
+};
+
+const materialBucketShare = (
+  materialComposition: Garment["material_composition"] | undefined,
+  bucket: MaterialBucket
+): number => {
+  const entries = (materialComposition ?? [])
+    .map((entry) => ({
+      material: normalize(entry.material).toLowerCase(),
+      weight: Number.isFinite(entry.percentage) && entry.percentage > 0 ? entry.percentage : 0,
+    }))
+    .filter((entry) => entry.material);
+
+  if (entries.length === 0) return 0;
+
+  const normalizedEntries = entries.map((entry) => ({
+    material: entry.material,
+    weight: entry.weight > 0 ? entry.weight : 1,
+  }));
+  const totalWeight = normalizedEntries.reduce((sum, entry) => sum + entry.weight, 0);
+  if (totalWeight <= 0) return 0;
+
+  const keywords = MATERIAL_KEYWORD_BUCKETS[bucket];
+  const matchedWeight = normalizedEntries.reduce((sum, entry) => {
+    const matches = keywords.some((keyword) => entry.material.includes(keyword));
+    return matches ? sum + entry.weight : sum;
+  }, 0);
+
+  return matchedWeight / totalWeight;
+};
+
+const computeMaterialIntentScore = ({
+  materialComposition,
+  intent,
+  weatherContext,
+}: {
+  materialComposition: Garment["material_composition"] | undefined;
+  intent: CanonicalIntent;
+  weatherContext?: string | null;
+}): number => {
+  const breathable = materialBucketShare(materialComposition, "breathable");
+  const insulating = materialBucketShare(materialComposition, "insulating");
+  const technical = materialBucketShare(materialComposition, "technical");
+  const refined = materialBucketShare(materialComposition, "refined");
+  const rugged = materialBucketShare(materialComposition, "rugged");
+  const absorbent = materialBucketShare(materialComposition, "absorbent");
+
+  const weatherSet = new Set(intent.weather.map((value) => value.toLowerCase()));
+  const placeSet = new Set(intent.place.map((value) => value.toLowerCase()));
+  const occasionSet = new Set(intent.occasion.map((value) => value.toLowerCase()));
+  const timeSet = new Set(intent.timeOfDay.map((value) => value.toLowerCase()));
+  const isWet = inferWetConditions(weatherContext);
+
+  let score = 0;
+
+  if (weatherSet.has("hot") || weatherSet.has("warm")) {
+    score += breathable * 14;
+    score -= insulating * 12;
+  } else if (weatherSet.has("cold")) {
+    score += insulating * 15;
+    score -= breathable * 8;
+  } else if (weatherSet.has("cool")) {
+    score += insulating * 10;
+    score += refined * 3;
+  } else if (weatherSet.has("mild")) {
+    score += breathable * 6;
+    score += insulating * 4;
+  }
+
+  if (isWet) {
+    score += technical * 14;
+    score -= absorbent * 8;
+  }
+
+  const placeSignalsTechnical =
+    placeSet.has("transit hub / airport") ||
+    placeSet.has("wilderness") ||
+    placeSet.has("coastal / beach") ||
+    placeSet.has("workshop");
+  if (placeSignalsTechnical) {
+    score += technical * 6;
+    score += rugged * 3;
+  }
+
+  const placeSignalsRefined =
+    placeSet.has("office / boardroom") ||
+    placeSet.has("metropolitan / city") ||
+    placeSet.has("creative studio / atelier");
+  if (placeSignalsRefined) {
+    score += refined * 5;
+  }
+
+  const occasionSignalsRefined =
+    occasionSet.has("black tie / evening wear") ||
+    occasionSet.has("business formal") ||
+    occasionSet.has("ceremonial / wedding") ||
+    occasionSet.has("date night / intimate dinner");
+  if (occasionSignalsRefined) {
+    score += refined * 8;
+    score -= technical * 3;
+  }
+
+  const occasionSignalsTechnical =
+    occasionSet.has("active transit / commuting") ||
+    occasionSet.has("active rugged / field sports") ||
+    occasionSet.has("manual labor / craft") ||
+    occasionSet.has("spectator sports");
+  if (occasionSignalsTechnical) {
+    score += technical * 8;
+    score += rugged * 4;
+  }
+
+  if (timeSet.has("evening") || timeSet.has("night")) {
+    score += refined * 4;
+  } else if (timeSet.has("morning") || timeSet.has("afternoon") || timeSet.has("all day")) {
+    score += breathable * 3;
+  }
+
+  return Math.round(score);
+};
+
+const deriveStylingFromContext = ({
+  weather,
+  occasion,
+  place,
+  timeOfDay,
+  weatherContext,
+}: {
+  weather: string[];
+  occasion: string[];
+  place: string[];
+  timeOfDay: string[];
+  weatherContext?: string | null;
+}): { formality: string | null; style: string[] } => {
+  const formalityScores = new Map<string, number>();
+  const styleScores = new Map<string, number>();
+
+  const addFormality = (label: string, weight: number) => {
+    const canonical = findCanonicalOption(FORMALITY_OPTIONS, label);
+    if (!canonical) return;
+    formalityScores.set(canonical, (formalityScores.get(canonical) ?? 0) + weight);
+  };
+  const addStyle = (label: string, weight: number) => {
+    const canonical = findCanonicalOption(STYLE_OPTIONS, label);
+    if (!canonical) return;
+    styleScores.set(canonical, (styleScores.get(canonical) ?? 0) + weight);
+  };
+
+  const weatherSet = new Set(weather.map((value) => value.toLowerCase()));
+  const occasionSet = new Set(occasion.map((value) => value.toLowerCase()));
+  const placeSet = new Set(place.map((value) => value.toLowerCase()));
+  const timeSet = new Set(timeOfDay.map((value) => value.toLowerCase()));
+  const isWet = inferWetConditions(weatherContext);
+
+  if (occasionSet.has("black tie / evening wear") || occasionSet.has("ceremonial / wedding")) {
+    addFormality("Formal", 8);
+    addFormality("Business Formal", 3);
+    addStyle("classic", 4);
+    addStyle("preppy", 2);
+  }
+  if (occasionSet.has("business formal")) {
+    addFormality("Business Formal", 8);
+    addFormality("Formal", 2);
+    addStyle("classic", 4);
+    addStyle("minimalist", 2);
+  }
+  if (occasionSet.has("date night / intimate dinner")) {
+    addFormality("Elevated Casual", 6);
+    addFormality("Business Casual", 3);
+    addStyle("classic", 3);
+    addStyle("minimalist", 3);
+    addStyle("mod", 2);
+  }
+  if (
+    occasionSet.has("casual social") ||
+    occasionSet.has("errands / low-key social") ||
+    occasionSet.has("outdoor social / garden party")
+  ) {
+    addFormality("Casual", 5);
+    addFormality("Elevated Casual", 3);
+    addStyle("classic", 2);
+    addStyle("preppy", 2);
+    addStyle("minimalist", 1);
+  }
+  if (
+    occasionSet.has("active transit / commuting") ||
+    occasionSet.has("active rugged / field sports") ||
+    occasionSet.has("manual labor / craft") ||
+    occasionSet.has("spectator sports")
+  ) {
+    addFormality("Technical", 6);
+    addFormality("Casual", 2);
+    addStyle("sporty", 4);
+    addStyle("outdoorsy", 4);
+    addStyle("workwear", 3);
+  }
+
+  if (placeSet.has("office / boardroom")) {
+    addFormality("Business Formal", 5);
+    addFormality("Business Casual", 4);
+    addStyle("classic", 3);
+    addStyle("minimalist", 3);
+    addStyle("preppy", 2);
+  }
+  if (
+    placeSet.has("transit hub / airport") ||
+    placeSet.has("workshop") ||
+    placeSet.has("wilderness")
+  ) {
+    addFormality("Technical", 4);
+    addFormality("Casual", 2);
+    addStyle("workwear", 4);
+    addStyle("outdoorsy", 4);
+    addStyle("sporty", 2);
+  }
+  if (placeSet.has("creative studio / atelier")) {
+    addFormality("Elevated Casual", 3);
+    addStyle("vintage", 4);
+    addStyle("mod", 3);
+    addStyle("workwear", 2);
+    addStyle("minimalist", 2);
+  }
+  if (placeSet.has("metropolitan / city")) {
+    addFormality("Elevated Casual", 3);
+    addFormality("Business Casual", 2);
+    addStyle("minimalist", 3);
+    addStyle("classic", 2);
+  }
+  if (placeSet.has("coastal / beach") || placeSet.has("countryside / estate") || placeSet.has("home / wfh")) {
+    addFormality("Casual", 4);
+    addStyle("sporty", 2);
+    addStyle("preppy", 2);
+    addStyle("outdoorsy", 2);
+  }
+
+  if (timeSet.has("night") || timeSet.has("evening")) {
+    addFormality("Elevated Casual", 3);
+    addFormality("Business Casual", 2);
+    addFormality("Formal", 1);
+    addStyle("classic", 2);
+    addStyle("minimalist", 2);
+    addStyle("mod", 2);
+  } else if (timeSet.has("morning") || timeSet.has("afternoon") || timeSet.has("all day")) {
+    addFormality("Casual", 2);
+    addFormality("Business Casual", 1);
+    addStyle("sporty", 1);
+    addStyle("preppy", 1);
+  }
+
+  if (weatherSet.has("hot") || weatherSet.has("warm")) {
+    addFormality("Casual", 2);
+    addFormality("Technical", 1);
+    addStyle("sporty", 2);
+    addStyle("preppy", 1);
+  } else if (weatherSet.has("cold") || weatherSet.has("cool")) {
+    addFormality("Elevated Casual", 2);
+    addFormality("Business Casual", 1);
+    addStyle("classic", 1);
+    addStyle("workwear", 1);
+  } else if (weatherSet.has("mild")) {
+    addFormality("Elevated Casual", 1);
+  }
+
+  if (isWet) {
+    addFormality("Technical", 3);
+    addStyle("workwear", 2);
+    addStyle("outdoorsy", 2);
+  }
+
+  const rankedFormality = Array.from(formalityScores.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([label]) => label);
+  const rankedStyles = Array.from(styleScores.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([label, score]) => ({ label, score }));
+
+  const fallbackFormality =
+    findCanonicalOption(FORMALITY_OPTIONS, "Casual") ??
+    findCanonicalOption(FORMALITY_OPTIONS, "Elevated Casual") ??
+    FORMALITY_OPTIONS[0] ??
+    null;
+  const fallbackStyle =
+    findCanonicalOption(STYLE_OPTIONS, "classic") ??
+    findCanonicalOption(STYLE_OPTIONS, "minimalist") ??
+    STYLE_OPTIONS[0] ??
+    null;
+
+  return {
+    formality: rankedFormality[0] ?? fallbackFormality,
+    style: rankedStyles.filter((item) => item.score > 0).slice(0, 2).map((item) => item.label)
+      .concat(rankedStyles.length === 0 && fallbackStyle ? [fallbackStyle] : [])
+      .slice(0, 2),
+  };
+};
+
+const buildCanonicalIntentFromContext = ({
+  context,
+  weatherContext,
+}: {
+  context: ContextIntent;
+  weatherContext?: string | null;
+}): CanonicalIntent => {
+  const derivedStyling = deriveStylingFromContext({
+    weather: context.weather,
+    occasion: context.occasion,
+    place: context.place,
+    timeOfDay: context.timeOfDay,
+    weatherContext,
+  });
+
+  return {
+    weather: context.weather,
+    occasion: context.occasion,
+    place: context.place,
+    timeOfDay: context.timeOfDay,
+    formality: derivedStyling.formality,
+    style: derivedStyling.style,
+    notes: context.notes,
+  };
+};
+
 const scoreGarmentForIntent = (
   garment: Pick<
     CompactGarment,
-    "style" | "formality" | "suitable_weather" | "suitable_occasions" | "suitable_places" | "suitable_time_of_day"
+    "style" | "formality" | "material_composition" | "suitable_weather" | "suitable_occasions" | "suitable_places" | "suitable_time_of_day"
   >,
-  intent: CanonicalIntent
+  intent: CanonicalIntent,
+  options?: { weatherContext?: string | null }
 ): number => {
   let score = 0;
 
@@ -876,6 +1257,11 @@ const scoreGarmentForIntent = (
   if (intent.style.length > 0 && intent.style.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase())) {
     score += 12;
   }
+  score += computeMaterialIntentScore({
+    materialComposition: garment.material_composition,
+    intent,
+    weatherContext: options?.weatherContext,
+  });
 
   return score;
 };
@@ -883,19 +1269,21 @@ const scoreGarmentForIntent = (
 const buildTravelPromptWardrobe = ({
   eligibleWardrobe,
   dayIntent,
+  weatherContext,
   usedGarmentIds,
   recentLookHistory,
   requiredIds,
 }: {
   eligibleWardrobe: CompactGarment[];
   dayIntent: CanonicalIntent;
+  weatherContext?: string | null;
   usedGarmentIds: Set<number>;
   recentLookHistory: Array<{ date: string; ids: number[] }>;
   requiredIds?: number[];
 }): CompactGarment[] => {
   const recentIds = new Set(recentLookHistory.flatMap((item) => item.ids));
   const scored = eligibleWardrobe.map((garment) => {
-    const intentScore = scoreGarmentForIntent(garment, dayIntent);
+    const intentScore = scoreGarmentForIntent(garment, dayIntent, { weatherContext });
     const noveltyBonus = usedGarmentIds.has(garment.id) ? -12 : 18;
     const recentPenalty = recentIds.has(garment.id) ? -8 : 0;
     const favoriteBonus = garment.favorite ? 4 : 0;
@@ -958,6 +1346,7 @@ const enforceCoreSilhouetteFromPool = ({
   lockedOuterwearId,
   isTravelDay,
   intent,
+  weatherContext,
   requiredCategories = CORE_SILHOUETTE_CATEGORIES,
 }: {
   ids: number[];
@@ -969,15 +1358,22 @@ const enforceCoreSilhouetteFromPool = ({
   lockedOuterwearId: number | null;
   isTravelDay: boolean;
   intent: CanonicalIntent;
+  weatherContext?: string | null;
   requiredCategories?: GarmentCategory[];
 }): number[] => {
   const blockedIdSet = new Set(blockedIds);
-  const selected = Array.from(new Set(ids)).filter((id) => !blockedIdSet.has(id));
+  const poolById = new Map(pool.map((garment) => [garment.id, garment]));
+  const selected = Array.from(new Set(ids)).filter((id) => {
+    if (blockedIdSet.has(id)) return false;
+    const garment = poolById.get(id);
+    if (!garment) return false;
+    return matchesWeatherIntent(garment.suitable_weather ?? [], intent.weather);
+  });
   const selectedSet = new Set(selected);
 
   const candidateSort = (left: CompactGarment, right: CompactGarment) => {
-    const leftScore = scoreGarmentForIntent(left, intent) + (usedGarmentIds.has(left.id) ? 0 : 25) + (left.favorite ? 5 : 0);
-    const rightScore = scoreGarmentForIntent(right, intent) + (usedGarmentIds.has(right.id) ? 0 : 25) + (right.favorite ? 5 : 0);
+    const leftScore = scoreGarmentForIntent(left, intent, { weatherContext }) + (usedGarmentIds.has(left.id) ? 0 : 25) + (left.favorite ? 5 : 0);
+    const rightScore = scoreGarmentForIntent(right, intent, { weatherContext }) + (usedGarmentIds.has(right.id) ? 0 : 25) + (right.favorite ? 5 : 0);
     return rightScore - leftScore;
   };
 
@@ -989,6 +1385,7 @@ const enforceCoreSilhouetteFromPool = ({
         if (selectedSet.has(garment.id)) return false;
         if (blockedIdSet.has(garment.id)) return false;
         if (categorizeType(garment.type) !== category) return false;
+        if (!matchesWeatherIntent(garment.suitable_weather ?? [], intent.weather)) return false;
         if (category === "outerwear" && lockedOuterwearId != null && garment.id !== lockedOuterwearId) {
           return false;
         }
@@ -1022,6 +1419,7 @@ const diversifyLineupFromPool = ({
   lockedOuterwearId,
   isTravelDay,
   intent,
+  weatherContext,
   requiredCategories = CORE_SILHOUETTE_CATEGORIES,
 }: {
   ids: number[];
@@ -1037,17 +1435,25 @@ const diversifyLineupFromPool = ({
   lockedOuterwearId: number | null;
   isTravelDay: boolean;
   intent: CanonicalIntent;
+  weatherContext?: string | null;
   requiredCategories?: GarmentCategory[];
 }): number[] => {
   const historyIds = [
     ...recentLookHistory.map((entry) => entry.ids),
     ...(avoidHistoryIds ?? []),
   ];
+  const poolById = new Map(pool.map((garment) => [garment.id, garment]));
   const current = toTopDownOrderedIds(ids, garmentCategoryById);
   const currentSignature = lineupSignature(current);
   const currentOverlap = maxOverlapAgainstHistory(current, historyIds);
+  const currentHasWeatherMismatch = current.some((id) => {
+    const garment = poolById.get(id);
+    if (!garment) return true;
+    return !matchesWeatherIntent(garment.suitable_weather ?? [], intent.weather);
+  });
 
   if (
+    !currentHasWeatherMismatch &&
     !usedLookSignatures.has(currentSignature) &&
     !(avoidSignatures?.has(currentSignature) ?? false) &&
     currentOverlap <= MAX_ALLOWED_OVERLAP_RATIO
@@ -1057,8 +1463,18 @@ const diversifyLineupFromPool = ({
 
   const blockedIdSet = new Set(blockedIds);
   const replacementPriority = current
-    .map((id, index) => ({ id, index, alreadyUsed: usedGarmentIds.has(id) }))
-    .sort((left, right) => Number(right.alreadyUsed) - Number(left.alreadyUsed));
+    .map((id, index) => {
+      const garment = poolById.get(id);
+      const weatherMismatch = garment
+        ? !matchesWeatherIntent(garment.suitable_weather ?? [], intent.weather)
+        : true;
+      return { id, index, alreadyUsed: usedGarmentIds.has(id), weatherMismatch };
+    })
+    .sort(
+      (left, right) =>
+        Number(right.weatherMismatch) - Number(left.weatherMismatch) ||
+        Number(right.alreadyUsed) - Number(left.alreadyUsed)
+    );
 
   for (const target of replacementPriority) {
     const targetCategory = garmentCategoryById.get(target.id) ?? "other";
@@ -1074,6 +1490,7 @@ const diversifyLineupFromPool = ({
         if (blockedIdSet.has(garment.id)) return false;
         if (current.includes(garment.id)) return false;
         if (categorizeType(garment.type) !== targetCategory) return false;
+        if (!matchesWeatherIntent(garment.suitable_weather ?? [], intent.weather)) return false;
         if (targetCategory === "outerwear" && lockedOuterwearId != null && garment.id !== lockedOuterwearId) {
           return false;
         }
@@ -1083,8 +1500,8 @@ const diversifyLineupFromPool = ({
         return true;
       })
       .sort((left, right) => {
-        const leftScore = scoreGarmentForIntent(left, intent) + (usedGarmentIds.has(left.id) ? 0 : 30) + (left.favorite ? 5 : 0);
-        const rightScore = scoreGarmentForIntent(right, intent) + (usedGarmentIds.has(right.id) ? 0 : 30) + (right.favorite ? 5 : 0);
+        const leftScore = scoreGarmentForIntent(left, intent, { weatherContext }) + (usedGarmentIds.has(left.id) ? 0 : 30) + (left.favorite ? 5 : 0);
+        const rightScore = scoreGarmentForIntent(right, intent, { weatherContext }) + (usedGarmentIds.has(right.id) ? 0 : 30) + (right.favorite ? 5 : 0);
         return rightScore - leftScore;
       });
 
@@ -1111,6 +1528,7 @@ const normalizeToFixedCategoryLook = ({
   pool,
   garmentCategoryById,
   intent,
+  weatherContext,
   requiredCategories,
   recentUsedIds,
   anchorGarmentId,
@@ -1121,6 +1539,7 @@ const normalizeToFixedCategoryLook = ({
   pool: CompactGarment[];
   garmentCategoryById: Map<number, GarmentCategory>;
   intent: CanonicalIntent;
+  weatherContext?: string | null;
   requiredCategories: GarmentCategory[];
   recentUsedIds?: Set<number>;
   anchorGarmentId?: number | null;
@@ -1145,6 +1564,7 @@ const normalizeToFixedCategoryLook = ({
     lockedOuterwearId: null,
     isTravelDay: true,
     intent,
+    weatherContext,
     requiredCategories,
   });
 
@@ -1164,10 +1584,20 @@ const normalizeToFixedCategoryLook = ({
       continue;
     }
 
-    const currentCategoryIds = normalized.filter((id) => garmentCategoryById.get(id) === category && !used.has(id));
+    const currentCategoryIds = normalized.filter((id) => {
+      if (garmentCategoryById.get(id) !== category || used.has(id)) return false;
+      const garment = poolById.get(id);
+      if (!garment) return false;
+      return matchesWeatherIntent(garment.suitable_weather ?? [], intent.weather);
+    });
     const currentCategoryIdSet = new Set(currentCategoryIds);
     const fallbackIds = pool
-      .filter((garment) => categorizeType(garment.type) === category && !used.has(garment.id))
+      .filter(
+        (garment) =>
+          categorizeType(garment.type) === category &&
+          !used.has(garment.id) &&
+          matchesWeatherIntent(garment.suitable_weather ?? [], intent.weather)
+      )
       .map((garment) => garment.id);
     const candidates = Array.from(new Set([...currentCategoryIds, ...fallbackIds]))
       .map((id) => {
@@ -1185,7 +1615,7 @@ const normalizeToFixedCategoryLook = ({
           ? (recentUsedIds.has(id) ? -14 : 8)
           : 0;
         const score =
-          scoreGarmentForIntent(garment, intent) +
+          scoreGarmentForIntent(garment, intent, { weatherContext }) +
           (garment.favorite ? 4 : 0) +
           providedBonus +
           anchorBonus +
@@ -1232,7 +1662,11 @@ const destinationLooksBeachFriendly = (destination: string): boolean => {
   return /(beach|coast|coastal|seaside|island|riviera|shore)/.test(lower);
 };
 
-const computeObjectiveMatchScore = (lineup: Garment[], intent: CanonicalIntent): number => {
+const computeObjectiveMatchScore = (
+  lineup: Garment[],
+  intent: CanonicalIntent,
+  options?: { weatherContext?: string | null }
+): number => {
   if (lineup.length === 0) return 0;
 
   const dimensionScores: number[] = [];
@@ -1267,6 +1701,19 @@ const computeObjectiveMatchScore = (lineup: Garment[], intent: CanonicalIntent):
   if (intent.style.length > 0) {
     const styleMatches = lineup.map((garment) => intent.style.some((style) => style.toLowerCase() === garment.style?.toLowerCase()));
     dimensionScores.push(ratioScore(styleMatches));
+  }
+
+  const materialScores = lineup.map((garment) =>
+    computeMaterialIntentScore({
+      materialComposition: garment.material_composition,
+      intent,
+      weatherContext: options?.weatherContext,
+    })
+  );
+  if (materialScores.length > 0) {
+    const materialDimensionScore =
+      materialScores.reduce((sum, score) => sum + Math.max(0, Math.min(100, 50 + (score * 3))), 0) / materialScores.length;
+    dimensionScores.push(materialDimensionScore);
   }
 
   const categories = new Set(lineup.map((garment) => categorizeType(garment.type)));
@@ -1313,6 +1760,7 @@ const toValidatedSingleLookCandidate = ({
     pool: compactWardrobe,
     garmentCategoryById,
     intent,
+    weatherContext,
     requiredCategories: SINGLE_REQUIRED_CATEGORIES,
     recentUsedIds,
     anchorGarmentId,
@@ -1328,8 +1776,12 @@ const toValidatedSingleLookCandidate = ({
 
   const lineupGarments = normalizedIds.map((id) => garmentById.get(id)!).filter(Boolean);
   if (lineupGarments.length !== SINGLE_REQUIRED_CATEGORIES.length) return null;
+  const hasWeatherMismatch = lineupGarments.some((garment) =>
+    !matchesWeatherIntent(garment.suitable_weather, intent.weather)
+  );
+  if (hasWeatherMismatch) return null;
 
-  const matchScore = computeObjectiveMatchScore(lineupGarments, intent);
+  const matchScore = computeObjectiveMatchScore(lineupGarments, intent, { weatherContext });
   const roundedModelConfidence = Math.max(0, Math.min(100, Math.round(modelConfidence)));
   const confidence = Math.max(
     20,
@@ -1384,7 +1836,7 @@ const buildDeterministicSingleLookFallbackCandidate = ({
       .map((garment) => ({
         garment,
         score:
-          scoreGarmentForIntent(garment, intent) +
+          scoreGarmentForIntent(garment, intent, { weatherContext }) +
           (garment.favorite ? 6 : 0) +
           (recentUsedIds?.has(garment.id) ? -14 : 8),
       }))
@@ -2017,15 +2469,23 @@ export async function POST(request: Request) {
         );
       }
 
+      const tripDerivedStyling = deriveStylingFromContext({
+        weather: Array.from(new Set(dayConstraintPlans.flatMap((plan) => plan.weatherTags))),
+        occasion: Array.from(new Set(dayConstraintPlans.flatMap((plan) => plan.strictConstraints.requiredOccasions))),
+        place: Array.from(new Set(dayConstraintPlans.flatMap((plan) => plan.strictConstraints.requiredPlaces))),
+        timeOfDay: timeAllDay ? [timeAllDay] : [],
+        weatherContext: weatherByDate.days.map((day) => day.summary).join(" "),
+      });
+
       tripWideOuterwearCandidates.sort((left, right) => {
         const leftScore =
           (left.favorite ? 6 : 0) +
-          (reasonIntent.formality && normalize(left.formality).toLowerCase() === reasonIntent.formality.toLowerCase() ? 8 : 0) +
-          (reasonIntent.style.some((style) => normalize(left.style).toLowerCase() === style.toLowerCase()) ? 8 : 0);
+          (tripDerivedStyling.formality && normalize(left.formality).toLowerCase() === tripDerivedStyling.formality.toLowerCase() ? 8 : 0) +
+          (tripDerivedStyling.style.some((style) => normalize(left.style).toLowerCase() === style.toLowerCase()) ? 8 : 0);
         const rightScore =
           (right.favorite ? 6 : 0) +
-          (reasonIntent.formality && normalize(right.formality).toLowerCase() === reasonIntent.formality.toLowerCase() ? 8 : 0) +
-          (reasonIntent.style.some((style) => normalize(right.style).toLowerCase() === style.toLowerCase()) ? 8 : 0);
+          (tripDerivedStyling.formality && normalize(right.formality).toLowerCase() === tripDerivedStyling.formality.toLowerCase() ? 8 : 0) +
+          (tripDerivedStyling.style.some((style) => normalize(right.style).toLowerCase() === style.toLowerCase()) ? 8 : 0);
         return rightScore - leftScore || left.id - right.id;
       });
 
@@ -2057,13 +2517,11 @@ export async function POST(request: Request) {
         const dayPlace = isTravelDay
           ? [transitPlace].filter((v): v is string => Boolean(v))
           : reasonIntent.place;
-        const fallbackDayIntent: CanonicalIntent = {
+        const fallbackDayContext: ContextIntent = {
           weather: toCanonicalValues(dayWeather.weather, WEATHER_OPTIONS),
           occasion: dayOccasion,
           place: dayPlace,
           timeOfDay: timeAllDay ? [timeAllDay] : [],
-          formality: reasonIntent.formality,
-          style: reasonIntent.style,
           notes: isTravelDay
             ? `${reasonIntent.notes} This is a travel/commute day (airport/transit), prioritize mobility and comfort while staying context-appropriate. Destination: ${weatherByDate.locationLabel}.`
             : `${reasonIntent.notes} Destination: ${weatherByDate.locationLabel}.`,
@@ -2073,14 +2531,15 @@ export async function POST(request: Request) {
         const eligibleWardrobe = compactWardrobe.filter((garment) => {
           const matchesPlace = hasAnyCanonicalMatch(garment.suitable_places ?? [], strictConstraints.requiredPlaces);
           const matchesOccasion = hasAnyCanonicalMatch(garment.suitable_occasions ?? [], strictConstraints.requiredOccasions);
-          return matchesPlace && matchesOccasion;
+          const matchesWeather = matchesWeatherIntent(garment.suitable_weather ?? [], dayPlan.weatherTags);
+          return matchesPlace && matchesOccasion && matchesWeather;
         });
         const eligibleIdSet = new Set(eligibleWardrobe.map((garment) => garment.id));
 
         if (eligibleWardrobe.length < 4) {
           skippedDays.push({
             date: dayWeather.date,
-            reason: `Not enough garments satisfy strict ${strictConstraints.label.toLowerCase()} place/occasion constraints.`,
+            reason: `Not enough garments satisfy strict ${strictConstraints.label.toLowerCase()} weather/place/occasion constraints.`,
             weatherContext: dayWeather.summary,
             weatherStatus: dayWeather.status,
           });
@@ -2094,19 +2553,19 @@ export async function POST(request: Request) {
         if (missingCoreInEligible.length > 0) {
           skippedDays.push({
             date: dayWeather.date,
-            reason: `Strict ${strictConstraints.label.toLowerCase()} constraints do not include required ${missingCoreInEligible.join(", ")} garments for a full look.`,
+            reason: `Strict ${strictConstraints.label.toLowerCase()} weather/place/occasion constraints do not include required ${missingCoreInEligible.join(", ")} garments for a full look.`,
             weatherContext: dayWeather.summary,
             weatherStatus: dayWeather.status,
           });
           continue;
         }
 
-        let dayIntent: CanonicalIntent = fallbackDayIntent;
+        let dayContext: ContextIntent = fallbackDayContext;
         try {
-          const { output: interpretedTravelDayIntent } = await generateText({
+          const { output: interpretedTravelDayContext } = await generateText({
             model: openai("gpt-4.1-mini"),
             output: Output.object({
-              schema: intentSchema,
+              schema: contextIntentSchema,
             }),
             temperature: 0.3,
             system: INTERPRETER_APPENDIX,
@@ -2125,42 +2584,40 @@ export async function POST(request: Request) {
             ].join("\n\n"),
           });
 
-          dayIntent = {
+          dayContext = {
             weather: (() => {
-              const interpretedWeather = toCanonicalValues(interpretedTravelDayIntent.weather, WEATHER_OPTIONS);
+              const interpretedWeather = toCanonicalValues(interpretedTravelDayContext.weather, WEATHER_OPTIONS);
               if (interpretedWeather.length > 0) return interpretedWeather;
-              return fallbackDayIntent.weather;
+              return fallbackDayContext.weather;
             })(),
             occasion: (() => {
               const merged = [
                 ...strictConstraints.requiredOccasions,
-                ...toCanonicalValues(interpretedTravelDayIntent.occasion, OCCASION_OPTIONS),
+                ...toCanonicalValues(interpretedTravelDayContext.occasion, OCCASION_OPTIONS),
               ];
-              return merged.length > 0 ? Array.from(new Set(merged)) : fallbackDayIntent.occasion;
+              return merged.length > 0 ? Array.from(new Set(merged)) : fallbackDayContext.occasion;
             })(),
             place: (() => {
               const merged = [
                 ...strictConstraints.requiredPlaces,
-                ...toCanonicalValues(interpretedTravelDayIntent.place, PLACE_OPTIONS),
+                ...toCanonicalValues(interpretedTravelDayContext.place, PLACE_OPTIONS),
               ];
-              return merged.length > 0 ? Array.from(new Set(merged)) : fallbackDayIntent.place;
+              return merged.length > 0 ? Array.from(new Set(merged)) : fallbackDayContext.place;
             })(),
             timeOfDay: (() => {
-              const interpretedTimes = toCanonicalValues(interpretedTravelDayIntent.timeOfDay, TIME_OPTIONS);
-              return interpretedTimes.length > 0 ? interpretedTimes : fallbackDayIntent.timeOfDay;
+              const interpretedTimes = toCanonicalValues(interpretedTravelDayContext.timeOfDay, TIME_OPTIONS);
+              return interpretedTimes.length > 0 ? interpretedTimes : fallbackDayContext.timeOfDay;
             })(),
-            formality:
-              toCanonicalSingle(interpretedTravelDayIntent.formality ?? null, FORMALITY_OPTIONS) ??
-              fallbackDayIntent.formality,
-            style: (() => {
-              const interpretedStyles = toCanonicalValues(interpretedTravelDayIntent.style, STYLE_OPTIONS);
-              return interpretedStyles.length > 0 ? interpretedStyles : fallbackDayIntent.style;
-            })(),
-            notes: normalize(interpretedTravelDayIntent.notes) || fallbackDayIntent.notes,
+            notes: normalize(interpretedTravelDayContext.notes) || fallbackDayContext.notes,
           };
         } catch (error) {
           console.warn("Travel day intent interpretation fallback used:", error);
         }
+
+        const dayIntent = buildCanonicalIntentFromContext({
+          context: dayContext,
+          weatherContext: dayWeather.summary,
+        });
 
         const recentHistory = recentLookHistory.slice(-3);
         const dayHistoricalRows = historicalTravelDaysByDate.get(dayWeather.date) ?? [];
@@ -2175,6 +2632,7 @@ export async function POST(request: Request) {
         const promptWardrobe = buildTravelPromptWardrobe({
           eligibleWardrobe,
           dayIntent,
+          weatherContext: dayWeather.summary,
           usedGarmentIds,
           recentLookHistory,
           requiredIds: [
@@ -2263,6 +2721,9 @@ export async function POST(request: Request) {
                 ? "DAY RULE: This is a travel date. Outfit must be suitable for airport, travel, and commute."
                 : "DAY RULE: This is a stay day. Optimize for the selected reason.",
               "SILHOUETTE RULE: Include at least one outerwear piece (jacket/coat), one top, one bottom, and one footwear item.",
+              dayPlan.weatherTags.length > 0
+                ? `STRICT WEATHER RULE (every selected garment must match at least one): ${JSON.stringify(dayPlan.weatherTags)}`
+                : "No strict weather tags available for this day.",
               `STRICT PLACE RULE (every selected garment must match at least one): ${JSON.stringify(strictConstraints.requiredPlaces)}`,
               `STRICT OCCASION RULE (every selected garment must match at least one): ${JSON.stringify(strictConstraints.requiredOccasions)}`,
               `Wardrobe JSON: ${JSON.stringify(promptWardrobe)}`,
@@ -2348,6 +2809,7 @@ export async function POST(request: Request) {
             lockedOuterwearId: resolvedOuterwearLock,
             isTravelDay,
             intent: dayIntent,
+            weatherContext: dayWeather.summary,
             requiredCategories: TRAVEL_REQUIRED_CATEGORIES,
           });
 
@@ -2365,6 +2827,7 @@ export async function POST(request: Request) {
             lockedOuterwearId: resolvedOuterwearLock,
             isTravelDay,
             intent: dayIntent,
+            weatherContext: dayWeather.summary,
             requiredCategories: TRAVEL_REQUIRED_CATEGORIES,
           });
 
@@ -2486,6 +2949,13 @@ export async function POST(request: Request) {
             if (!garment) return true;
             return !hasAnyCanonicalMatch(garment.suitable_occasions ?? [], strictConstraints.requiredOccasions);
           });
+          const violatesWeatherRule =
+            dayPlan.weatherTags.length > 0 &&
+            orderedIds.some((id) => {
+              const garment = garmentById.get(id);
+              if (!garment) return true;
+              return !matchesWeatherIntent(garment.suitable_weather ?? [], dayPlan.weatherTags);
+            });
           const violatesCoreSilhouette = !hasCoreSilhouetteFromIds(
             orderedIds,
             garmentCategoryById,
@@ -2511,6 +2981,7 @@ export async function POST(request: Request) {
             violatesTransitReserveRule,
             violatesPlaceRule,
             violatesOccasionRule,
+            violatesWeatherRule,
             violatesCoreSilhouette,
             violatesDuplicateLookRule,
             violatesHighOverlapRule,
@@ -2529,6 +3000,7 @@ export async function POST(request: Request) {
           violatesTransitReserveRule,
           violatesPlaceRule,
           violatesOccasionRule,
+          violatesWeatherRule,
           violatesCoreSilhouette,
           violatesDuplicateLookRule,
           violatesHighOverlapRule,
@@ -2568,6 +3040,7 @@ export async function POST(request: Request) {
               violatesTransitReserveRule,
               violatesPlaceRule,
               violatesOccasionRule,
+              violatesWeatherRule,
               violatesCoreSilhouette,
               violatesDuplicateLookRule,
               violatesHighOverlapRule,
@@ -2595,6 +3068,7 @@ export async function POST(request: Request) {
           violatesTransitReserveRule ||
           violatesPlaceRule ||
           violatesOccasionRule ||
+          violatesWeatherRule ||
           violatesCoreSilhouette ||
           violatesDuplicateLookRule ||
           violatesHighOverlapRule;
@@ -2618,6 +3092,7 @@ export async function POST(request: Request) {
           violatesTransitReserveRule ||
           violatesPlaceRule ||
           violatesOccasionRule ||
+          violatesWeatherRule ||
           violatesCoreSilhouette ||
           violatesDuplicateLookRule ||
           violatesHighOverlapRule ||
@@ -2639,8 +3114,8 @@ export async function POST(request: Request) {
                       ? "Could not generate a sufficiently distinct look from previous days under current constraints."
                       : violatesHistoricalRepeatRule
                         ? "Could not generate a sufficiently distinct look from previous identical travel runs under current constraints."
-                      : violatesPlaceRule || violatesOccasionRule
-                        ? `Could not satisfy strict ${strictConstraints.label.toLowerCase()} place/occasion constraints.`
+                      : violatesPlaceRule || violatesOccasionRule || violatesWeatherRule
+                        ? `Could not satisfy strict ${strictConstraints.label.toLowerCase()} weather/place/occasion constraints.`
                         : "Could not satisfy day constraints.",
             weatherContext: dayWeather.summary,
             weatherStatus: dayWeather.status,
@@ -2658,7 +3133,9 @@ export async function POST(request: Request) {
           file_name: garment.file_name,
         }));
 
-        const matchScore = computeObjectiveMatchScore(lineupGarments, dayIntent);
+        const matchScore = computeObjectiveMatchScore(lineupGarments, dayIntent, {
+          weatherContext: dayWeather.summary,
+        });
         const modelConfidence = Math.round(generatedDay.modelConfidence);
         const confidence = Math.max(
           20,
@@ -2767,10 +3244,10 @@ export async function POST(request: Request) {
     const requestedAnchorGarmentId = parsedSingleBody.data.anchorGarmentId ?? null;
     const requestedAnchorMode: AnchorMode = parsedSingleBody.data.anchorMode ?? "strict";
 
-    const { output: interpreted, toolResults } = await generateText({
+    const { output: interpretedContext, toolResults } = await generateText({
       model: openai("gpt-4.1-mini"),
       output: Output.object({
-        schema: intentSchema,
+        schema: contextIntentSchema,
       }),
       tools: {
         getWeatherByLocation: tool({
@@ -2792,7 +3269,7 @@ export async function POST(request: Request) {
       system: INTERPRETER_APPENDIX,
       prompt: `Canonical options:\n${JSON.stringify(canonicalOptions)}\n\nUser request:\n${userPrompt}`,
     });
-    console.info("[ai-look][single][step-1][interpreted-intent]", JSON.stringify(interpreted));
+    console.info("[ai-look][single][step-1][interpreted-context]", JSON.stringify(interpretedContext));
 
     const latestWeatherToolResult = [...toolResults]
       .reverse()
@@ -2804,6 +3281,7 @@ export async function POST(request: Request) {
     let weatherContextSummary = normalize(weatherOutput?.summary);
     let resolvedWeatherTags = dedupeCanonicalWeather(weatherOutput?.weather ?? []);
     let weatherStatus: WeatherContextStatus = "not_requested";
+    let weatherContextSource: WeatherContextSource = weatherContextSummary ? "model_tool" : "none";
 
     // Fallback: if first pass skipped tool call, force one when a location hint exists.
     const locationHint = extractLocationHintFromPrompt(userPrompt);
@@ -2847,6 +3325,9 @@ export async function POST(request: Request) {
         if (fallbackWeatherTags.length > 0) {
           resolvedWeatherTags = fallbackWeatherTags;
         }
+        if (weatherContextSummary) {
+          weatherContextSource = "forced_tool";
+        }
       }
     }
 
@@ -2859,6 +3340,9 @@ export async function POST(request: Request) {
         if (directWeatherTags.length > 0) {
           resolvedWeatherTags = directWeatherTags;
         }
+        if (weatherContextSummary) {
+          weatherContextSource = "direct_fetch";
+        }
       } catch (error) {
         console.warn("Direct weather fallback failed:", error);
       }
@@ -2869,27 +3353,44 @@ export async function POST(request: Request) {
     } else if (locationHint) {
       weatherStatus = "failed";
     }
+    console.info(
+      "[ai-look][single][step-1][weather-resolution]",
+      JSON.stringify({
+        weatherStatus,
+        weatherContextSource,
+        locationHint: locationHint || null,
+        resolvedWeatherTags,
+      })
+    );
 
-    const interpretedWeather = toCanonicalValues(interpreted.weather, WEATHER_OPTIONS);
+    const interpretedWeather = toCanonicalValues(interpretedContext.weather, WEATHER_OPTIONS);
     const canonicalWeather = resolvedWeatherTags.length > 0 ? resolvedWeatherTags : interpretedWeather;
-    const interpretedNotes = normalize(interpreted.notes);
-    const withoutUnavailableWeatherClaim = interpretedNotes
-      .replace(/weather data[^.]*unavailable[^.]*\.?/i, "")
-      .replace(/weather data[^.]*not available[^.]*\.?/i, "")
-      .replace(/(current\s+)?weather\s+resolved[^.]*\.?/i, "")
-      .replace(/\s{2,}/g, " ")
-      .trim();
-    const canonicalNotes = withoutUnavailableWeatherClaim || interpretedNotes;
+    const interpretedNotes = normalize(interpretedContext.notes);
+    const withoutWeatherStatusClaims = stripWeatherStatusClaims(interpretedNotes);
+    const canonicalNotes = weatherContextSummary
+      ? withoutWeatherStatusClaims
+      : withoutWeatherStatusClaims || interpretedNotes;
 
-    const canonicalIntent: CanonicalIntent = {
+    const canonicalContext: ContextIntent = {
       weather: canonicalWeather,
-      occasion: toCanonicalValues(interpreted.occasion, OCCASION_OPTIONS),
-      place: toCanonicalValues(interpreted.place, PLACE_OPTIONS),
-      timeOfDay: toCanonicalValues(interpreted.timeOfDay, TIME_OPTIONS),
-      formality: toCanonicalSingle(interpreted.formality ?? null, FORMALITY_OPTIONS),
-      style: toCanonicalValues(interpreted.style, STYLE_OPTIONS),
+      occasion: toCanonicalValues(interpretedContext.occasion, OCCASION_OPTIONS),
+      place: toCanonicalValues(interpretedContext.place, PLACE_OPTIONS),
+      timeOfDay: toCanonicalValues(interpretedContext.timeOfDay, TIME_OPTIONS),
       notes: canonicalNotes,
     };
+    console.info("[ai-look][single][step-1][canonical-context]", JSON.stringify(canonicalContext));
+
+    const canonicalIntent = buildCanonicalIntentFromContext({
+      context: canonicalContext,
+      weatherContext: weatherContextSummary || null,
+    });
+    console.info(
+      "[ai-look][single][step-1][derived-styling]",
+      JSON.stringify({
+        formality: canonicalIntent.formality,
+        style: canonicalIntent.style,
+      })
+    );
     console.info("[ai-look][single][step-1][canonical-intent]", JSON.stringify(canonicalIntent));
 
     const garmentById = new Map(wardrobeData.map((garment) => [garment.id, garment]));
@@ -2943,6 +3444,20 @@ export async function POST(request: Request) {
         { status: 422 }
       );
     }
+    const missingWeatherCompatibleSingleCategories = missingWeatherCompatibleCategoriesFromWardrobe(
+      compactWardrobe,
+      canonicalIntent.weather,
+      SINGLE_REQUIRED_CATEGORIES
+    );
+    if (missingWeatherCompatibleSingleCategories.length > 0) {
+      const weatherLabel = canonicalIntent.weather.join(", ");
+      return NextResponse.json(
+        {
+          error: `AI could not produce a weather-compatible complete look for ${weatherLabel}. Missing category data: ${missingWeatherCompatibleSingleCategories.join(", ")}.`,
+        },
+        { status: 422 }
+      );
+    }
 
     let recentSingleHistory: SingleLookHistoryEntry[] = [];
     try {
@@ -2989,6 +3504,9 @@ export async function POST(request: Request) {
               ? `Do not repeat lineup signatures from previous rounds: ${JSON.stringify(Array.from(seenSignatures))}`
               : "No previous candidate signatures yet.",
             "Each candidate must be a complete 4-piece silhouette (outerwear, top, bottom, footwear).",
+            canonicalIntent.weather.length > 0
+              ? `STRICT WEATHER RULE: Every selected garment must match at least one weather tag from ${JSON.stringify(canonicalIntent.weather)} (treat 'all season' as compatible).`
+              : "No strict weather tags available.",
             `Wardrobe JSON:\n${JSON.stringify(compactWardrobe)}`,
           ].join("\n\n"),
         });
