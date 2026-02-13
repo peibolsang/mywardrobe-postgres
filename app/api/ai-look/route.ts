@@ -1,5 +1,6 @@
 import "server-only";
 
+import { randomUUID } from "crypto";
 import { readFile } from "fs/promises";
 import path from "path";
 import { openai } from "@ai-sdk/openai";
@@ -88,16 +89,45 @@ interface ContextIntent {
   notes: string;
 }
 
+type WeatherProfileTempBand = "cold" | "cool" | "mild" | "warm" | "hot";
+type WeatherProfilePrecipitationLevel = "none" | "light" | "moderate" | "heavy";
+type WeatherProfilePrecipitationType = "none" | "rain" | "snow" | "mixed";
+type WeatherProfileWindBand = "calm" | "breezy" | "windy";
+type WeatherProfileHumidityBand = "dry" | "normal" | "humid";
+type WeatherProfileWetRisk = "low" | "medium" | "high";
+type WeatherProfileConfidence = "high" | "medium" | "low";
+
+interface WeatherProfile {
+  tempBand: WeatherProfileTempBand;
+  precipitationLevel: WeatherProfilePrecipitationLevel;
+  precipitationType: WeatherProfilePrecipitationType;
+  windBand: WeatherProfileWindBand;
+  humidityBand: WeatherProfileHumidityBand;
+  wetSurfaceRisk: WeatherProfileWetRisk;
+  confidence: WeatherProfileConfidence;
+}
+
+interface DerivedProfile {
+  formality: string | null;
+  style: string[];
+  materialTargets: {
+    prefer: string[];
+    avoid: string[];
+  };
+}
+
 interface WeatherContext {
   locationLabel: string;
   summary: string;
   weather: string[];
+  weatherProfile: WeatherProfile;
 }
 
 interface TravelDayWeather {
   date: string;
   summary: string;
   weather: string[];
+  weatherProfile: WeatherProfile;
   status: "forecast" | "seasonal" | "failed";
 }
 
@@ -164,6 +194,7 @@ const AI_LOOK_HOUR_WINDOW_MS = 60 * 60 * 1000;
 const AI_LOOK_MAX_REQUESTS_PER_MINUTE = 8;
 const AI_LOOK_MAX_REQUESTS_PER_HOUR = 120;
 const MAX_TRAVEL_PLAN_DAYS = 21;
+const AI_LOOK_DEBUG = process.env.AI_LOOK_DEBUG === "1";
 const aiLookInMemoryRateLimit = new Map<string, InMemoryRateLimitState>();
 let aiLookRateLimitTableReadyPromise: Promise<void> | null = null;
 let hasLoggedRateLimitFallback = false;
@@ -410,6 +441,159 @@ const weatherCodeToText = (code: number | null | undefined): string => {
   return "variable conditions";
 };
 
+const toTempBand = (minTemp: number, maxTemp: number): WeatherProfileTempBand => {
+  const avg = (minTemp + maxTemp) / 2;
+  if (avg >= 30) return "hot";
+  if (avg >= 24) return "warm";
+  if (avg >= 16) return "mild";
+  if (avg >= 8) return "cool";
+  return "cold";
+};
+
+const inferPrecipitationProfile = (description: string): {
+  type: WeatherProfilePrecipitationType;
+  level: WeatherProfilePrecipitationLevel;
+} => {
+  const normalized = normalize(description).toLowerCase();
+  if (!normalized) return { type: "none", level: "none" };
+
+  const hasSnow = /\b(snow|sleet|hail|blizzard|flurr(y|ies)|ice)\b/.test(normalized);
+  const hasRain = /\b(rain|drizzle|shower|storm|thunder)\b/.test(normalized);
+  const type: WeatherProfilePrecipitationType =
+    hasSnow && hasRain ? "mixed" : hasSnow ? "snow" : hasRain ? "rain" : "none";
+
+  if (type === "none") return { type, level: "none" };
+  if (/\b(heavy|intense|severe|thunderstorm|storm)\b/.test(normalized)) {
+    return { type, level: "heavy" };
+  }
+  if (/\b(moderate)\b/.test(normalized)) {
+    return { type, level: "moderate" };
+  }
+  return { type, level: "light" };
+};
+
+const toWindBand = (windKmh: number | null): WeatherProfileWindBand => {
+  if (typeof windKmh !== "number" || !Number.isFinite(windKmh)) return "calm";
+  if (windKmh >= 28) return "windy";
+  if (windKmh >= 12) return "breezy";
+  return "calm";
+};
+
+const toHumidityBand = (humidity: number | undefined): WeatherProfileHumidityBand => {
+  if (typeof humidity !== "number" || !Number.isFinite(humidity)) return "normal";
+  if (humidity < 40) return "dry";
+  if (humidity > 70) return "humid";
+  return "normal";
+};
+
+const toWetSurfaceRisk = ({
+  precipitationType,
+  precipitationLevel,
+  humidityBand,
+  tempBand,
+}: {
+  precipitationType: WeatherProfilePrecipitationType;
+  precipitationLevel: WeatherProfilePrecipitationLevel;
+  humidityBand: WeatherProfileHumidityBand;
+  tempBand: WeatherProfileTempBand;
+}): WeatherProfileWetRisk => {
+  if (precipitationLevel === "heavy" || precipitationType === "snow" || precipitationType === "mixed") {
+    return "high";
+  }
+  if (precipitationLevel === "moderate") return "high";
+  if (precipitationLevel === "light") return "medium";
+  if (humidityBand === "humid" && (tempBand === "cold" || tempBand === "cool")) return "medium";
+  return "low";
+};
+
+const buildWeatherProfile = ({
+  minTemp,
+  maxTemp,
+  humidity,
+  windKmh,
+  description,
+  confidence,
+  fallbackWeather,
+}: {
+  minTemp?: number;
+  maxTemp?: number;
+  humidity?: number;
+  windKmh?: number | null;
+  description?: string;
+  confidence: WeatherProfileConfidence;
+  fallbackWeather?: string[];
+}): WeatherProfile => {
+  const safeMin = typeof minTemp === "number" ? minTemp : typeof maxTemp === "number" ? maxTemp : 16;
+  const safeMax = typeof maxTemp === "number" ? maxTemp : typeof minTemp === "number" ? minTemp : 20;
+  const tempBand = toTempBand(safeMin, safeMax);
+  const precipFromDescription = inferPrecipitationProfile(description ?? "");
+
+  const fallbackSet = new Set((fallbackWeather ?? []).map((item) => normalize(item).toLowerCase()));
+  const precipitationType: WeatherProfilePrecipitationType = (() => {
+    if (precipFromDescription.type !== "none") return precipFromDescription.type;
+    if (fallbackSet.has("cold") && fallbackSet.has("mild")) return "mixed";
+    return "none";
+  })();
+  const precipitationLevel: WeatherProfilePrecipitationLevel =
+    precipFromDescription.level !== "none" ? precipFromDescription.level : "none";
+  const humidityBand = toHumidityBand(humidity);
+  const windBand = toWindBand(typeof windKmh === "number" ? windKmh : null);
+  const wetSurfaceRisk = toWetSurfaceRisk({
+    precipitationType,
+    precipitationLevel,
+    humidityBand,
+    tempBand,
+  });
+
+  return {
+    tempBand,
+    precipitationLevel,
+    precipitationType,
+    windBand,
+    humidityBand,
+    wetSurfaceRisk,
+    confidence,
+  };
+};
+
+const inferTempBandFromWeatherTags = (weatherTags: string[]): WeatherProfileTempBand => {
+  const set = new Set(weatherTags.map((value) => normalize(value).toLowerCase()));
+  if (set.has("hot")) return "hot";
+  if (set.has("warm")) return "warm";
+  if (set.has("mild")) return "mild";
+  if (set.has("cool")) return "cool";
+  if (set.has("cold")) return "cold";
+  return "mild";
+};
+
+const buildFallbackWeatherProfile = ({
+  weatherTags,
+  summary,
+  confidence,
+}: {
+  weatherTags: string[];
+  summary?: string | null;
+  confidence: WeatherProfileConfidence;
+}): WeatherProfile => {
+  const tempBand = inferTempBandFromWeatherTags(weatherTags);
+  const tempRangeByBand: Record<WeatherProfileTempBand, [number, number]> = {
+    cold: [2, 7],
+    cool: [8, 15],
+    mild: [16, 22],
+    warm: [23, 29],
+    hot: [30, 36],
+  };
+  const [minTemp, maxTemp] = tempRangeByBand[tempBand];
+
+  return buildWeatherProfile({
+    minTemp,
+    maxTemp,
+    description: normalize(summary ?? ""),
+    confidence,
+    fallbackWeather: weatherTags,
+  });
+};
+
 async function fetchWeatherContext(locationQuery: string): Promise<WeatherContext | null> {
   const queryVariants = buildWeatherLocationQueryVariants(locationQuery);
   if (queryVariants.length === 0) return null;
@@ -460,7 +644,17 @@ async function fetchWeatherContext(locationQuery: string): Promise<WeatherContex
       ? dedupeCanonicalWeather(inferCanonicalWeatherFromTemperature(dayTempMin, dayTempMax))
       : [];
 
-    return { locationLabel, summary, weather };
+    const weatherProfile = buildWeatherProfile({
+      minTemp: dayTempMin,
+      maxTemp: dayTempMax,
+      humidity: dayHumidity,
+      windKmh,
+      description: dayDescription,
+      confidence: "high",
+      fallbackWeather: weather,
+    });
+
+    return { locationLabel, summary, weather, weatherProfile };
   }
 
   return null;
@@ -539,6 +733,7 @@ async function fetchTravelWeatherByDateRange(
           date,
           summary: llmFallback.summary,
           weather: llmFallback.weather,
+          weatherProfile: llmFallback.weatherProfile,
           status: "seasonal",
         });
         continue;
@@ -548,6 +743,11 @@ async function fetchTravelWeatherByDateRange(
         date,
         summary: `Weather unavailable for ${date}; using destination and reason context only.`,
         weather: [],
+        weatherProfile: buildFallbackWeatherProfile({
+          weatherTags: [],
+          summary: "",
+          confidence: "low",
+        }),
         status: "failed",
       });
     }
@@ -663,6 +863,19 @@ async function fetchTravelWeatherByDateRange(
           winds.length > 0 ? `Wind ${Math.round((winds.reduce((a, b) => a + b, 0) / winds.length) * 3.6)} km/h.` : "",
         ].filter(Boolean).join(" "),
         weather,
+        weatherProfile: buildWeatherProfile({
+          minTemp: min,
+          maxTemp: max,
+          humidity: humidities.length > 0
+            ? humidities.reduce((a, b) => a + b, 0) / humidities.length
+            : undefined,
+          windKmh: winds.length > 0
+            ? (winds.reduce((a, b) => a + b, 0) / winds.length) * 3.6
+            : undefined,
+          description,
+          confidence: "high",
+          fallbackWeather: weather,
+        }),
         status: "forecast",
       });
       continue;
@@ -674,6 +887,7 @@ async function fetchTravelWeatherByDateRange(
         date,
         summary: llmFallback.summary,
         weather: llmFallback.weather,
+        weatherProfile: llmFallback.weatherProfile,
         status: "seasonal",
       });
       continue;
@@ -686,6 +900,11 @@ async function fetchTravelWeatherByDateRange(
       date,
       summary: `No direct forecast for ${date} in ${locationLabel}. Using typical seasonal conditions for planning.`,
       weather: seasonalWeather,
+      weatherProfile: buildFallbackWeatherProfile({
+        weatherTags: seasonalWeather,
+        summary: `Typical seasonal conditions for ${locationLabel} in month ${month + 1}.`,
+        confidence: "low",
+      }),
       status: "seasonal",
     });
   }
@@ -701,7 +920,7 @@ const monthLabel = (dateIso: string): string => {
 async function fetchLlmClimateFallback(
   destination: string,
   dateIso: string
-): Promise<{ summary: string; weather: string[] } | null> {
+): Promise<{ summary: string; weather: string[]; weatherProfile: WeatherProfile } | null> {
   try {
     const climateMonth = monthLabel(dateIso);
     const { object } = await generateObject({
@@ -725,6 +944,13 @@ async function fetchLlmClimateFallback(
     return {
       summary: `No direct forecast for ${dateIso} in ${destination}. Using model-estimated monthly climate for ${climateMonth}: typically ${Math.round(object.avgMinTempC)}-${Math.round(object.avgMaxTempC)}°C with ${object.likelyConditions.join(", ")}. ${normalize(object.notes)}`,
       weather,
+      weatherProfile: buildWeatherProfile({
+        minTemp: object.avgMinTempC,
+        maxTemp: object.avgMaxTempC,
+        description: object.likelyConditions.join(", "),
+        confidence: "medium",
+        fallbackWeather: weather,
+      }),
     };
   } catch (error) {
     console.warn("LLM climate fallback failed:", error);
@@ -904,7 +1130,13 @@ const MATERIAL_KEYWORD_BUCKETS = {
 
 type MaterialBucket = keyof typeof MATERIAL_KEYWORD_BUCKETS;
 
-const inferWetConditions = (weatherContext?: string | null): boolean => {
+const inferWetConditions = (
+  weatherContext?: string | null,
+  weatherProfile?: WeatherProfile | null
+): boolean => {
+  if (weatherProfile?.wetSurfaceRisk === "high" || weatherProfile?.wetSurfaceRisk === "medium") {
+    return true;
+  }
   const text = normalize(weatherContext).toLowerCase();
   if (!text) return false;
   return /\b(rain|drizzle|shower|storm|thunder|snow|sleet|hail|precipitation|wet)\b/.test(text);
@@ -939,14 +1171,153 @@ const materialBucketShare = (
   return matchedWeight / totalWeight;
 };
 
+const RAIN_CONTEXT_REGEX = /\b(rain|drizzle|shower|storm|thunder|snow|sleet|hail|precipitation|wet)\b/;
+const RAIN_READY_FEATURE_REGEX =
+  /\b(waterproof|water-resistant|water resistant|water-repellent|water repellent|weatherproof|rain-ready|rain ready|gore-tex|goretex|membrane|waxed|sealed seams?|storm)\b/;
+const ABSORBENT_RAIN_MATERIAL_REGEX =
+  /\b(cotton|denim|canvas|suede|linen|viscose|rayon|tweed|wool|flannel|corduroy)\b/;
+const TECHNICAL_RAIN_MATERIAL_REGEX =
+  /\b(nylon|polyester|polyamide|gore|gore-tex|goretex|membrane|shell|neoprene|rubber|pvc)\b/;
+const NON_RAIN_OUTERWEAR_TYPE_REGEX = /\b(overshirt|trucker|blazer|cardigan|shirt jacket|shirt-jacket)\b/;
+const NON_RAIN_FOOTWEAR_TYPE_REGEX = /\b(sneaker|trainer|canvas shoe|canvas sneaker)\b/;
+
+const isWetWeatherSafetyGateActive = (
+  weatherContext?: string | null,
+  weatherProfile?: WeatherProfile | null
+): boolean => {
+  const wetRisk = weatherProfile?.wetSurfaceRisk ?? (inferWetConditions(weatherContext, weatherProfile) ? "high" : "low");
+  if (wetRisk !== "high" && wetRisk !== "medium") return false;
+
+  const hasPrecipitationFromProfile =
+    weatherProfile != null &&
+    weatherProfile.precipitationType !== "none" &&
+    weatherProfile.precipitationLevel !== "none";
+  const contextHasWetTerms = RAIN_CONTEXT_REGEX.test(normalize(weatherContext).toLowerCase());
+
+  return hasPrecipitationFromProfile || contextHasWetTerms;
+};
+
+type WetWeatherSafetyAssessment = {
+  gateActive: boolean;
+  applicable: boolean;
+  rainReady: boolean | null;
+  reason: string | null;
+};
+
+const assessWetWeatherSafety = (
+  garment: Pick<CompactGarment, "type" | "material_composition" | "features">,
+  options?: { weatherContext?: string | null; weatherProfile?: WeatherProfile | null }
+): WetWeatherSafetyAssessment => {
+  const gateActive = isWetWeatherSafetyGateActive(options?.weatherContext, options?.weatherProfile);
+  const category = categorizeType(garment.type);
+  const applicable = category === "outerwear" || category === "footwear";
+  if (!gateActive || !applicable) {
+    return {
+      gateActive,
+      applicable,
+      rainReady: null,
+      reason: null,
+    };
+  }
+
+  const wetRisk = options?.weatherProfile?.wetSurfaceRisk ?? "medium";
+  const technicalShare = materialBucketShare(garment.material_composition, "technical");
+  const absorbentShare = materialBucketShare(garment.material_composition, "absorbent");
+  const materialNames = (garment.material_composition ?? [])
+    .map((entry) => normalize(entry.material).toLowerCase())
+    .filter(Boolean);
+  const typeText = normalize(garment.type).toLowerCase();
+  const featureText = normalize(garment.features).toLowerCase();
+
+  const hasRainReadyFeature = RAIN_READY_FEATURE_REGEX.test(featureText);
+  const hasAbsorbentRainMaterial = materialNames.some((name) => ABSORBENT_RAIN_MATERIAL_REGEX.test(name));
+  const hasTechnicalRainMaterial = materialNames.some((name) => TECHNICAL_RAIN_MATERIAL_REGEX.test(name));
+
+  if (hasRainReadyFeature) {
+    return {
+      gateActive,
+      applicable,
+      rainReady: true,
+      reason: null,
+    };
+  }
+
+  if (category === "outerwear") {
+    if (NON_RAIN_OUTERWEAR_TYPE_REGEX.test(typeText) && !hasTechnicalRainMaterial) {
+      return {
+        gateActive,
+        applicable,
+        rainReady: false,
+        reason: "non_rain_outerwear_type",
+      };
+    }
+    if (hasAbsorbentRainMaterial && !hasTechnicalRainMaterial) {
+      return {
+        gateActive,
+        applicable,
+        rainReady: false,
+        reason: "absorbent_outerwear_material",
+      };
+    }
+    if (wetRisk === "high" && technicalShare < 0.15 && absorbentShare > 0.35) {
+      return {
+        gateActive,
+        applicable,
+        rainReady: false,
+        reason: "insufficient_rain_protection_outerwear",
+      };
+    }
+  }
+
+  if (category === "footwear") {
+    if (NON_RAIN_FOOTWEAR_TYPE_REGEX.test(typeText) && technicalShare < 0.2) {
+      return {
+        gateActive,
+        applicable,
+        rainReady: false,
+        reason: "non_rain_footwear_type",
+      };
+    }
+    if (hasAbsorbentRainMaterial && !hasTechnicalRainMaterial && technicalShare < 0.2) {
+      return {
+        gateActive,
+        applicable,
+        rainReady: false,
+        reason: "absorbent_footwear_material",
+      };
+    }
+    if (wetRisk === "high" && !/\bboot\b/.test(typeText) && technicalShare < 0.1) {
+      return {
+        gateActive,
+        applicable,
+        rainReady: false,
+        reason: "insufficient_rain_protection_footwear",
+      };
+    }
+  }
+
+  return {
+    gateActive,
+    applicable,
+    rainReady: true,
+    reason: null,
+  };
+};
+
 const computeMaterialIntentScore = ({
   materialComposition,
   intent,
+  category,
   weatherContext,
+  weatherProfile,
+  derivedProfile,
 }: {
   materialComposition: Garment["material_composition"] | undefined;
   intent: CanonicalIntent;
+  category?: GarmentCategory;
   weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
 }): number => {
   const breathable = materialBucketShare(materialComposition, "breathable");
   const insulating = materialBucketShare(materialComposition, "insulating");
@@ -959,9 +1330,25 @@ const computeMaterialIntentScore = ({
   const placeSet = new Set(intent.place.map((value) => value.toLowerCase()));
   const occasionSet = new Set(intent.occasion.map((value) => value.toLowerCase()));
   const timeSet = new Set(intent.timeOfDay.map((value) => value.toLowerCase()));
-  const isWet = inferWetConditions(weatherContext);
+  const isWet = inferWetConditions(weatherContext, weatherProfile);
+  const preferredBuckets = new Set((derivedProfile?.materialTargets.prefer ?? []).map((value) => value.toLowerCase()));
+  const avoidedBuckets = new Set((derivedProfile?.materialTargets.avoid ?? []).map((value) => value.toLowerCase()));
 
   let score = 0;
+
+  if (preferredBuckets.has("breathable")) score += breathable * 9;
+  if (preferredBuckets.has("insulating")) score += insulating * 9;
+  if (preferredBuckets.has("technical")) score += technical * 11;
+  if (preferredBuckets.has("refined")) score += refined * 7;
+  if (preferredBuckets.has("rugged")) score += rugged * 6;
+  if (preferredBuckets.has("absorbent")) score += absorbent * 5;
+
+  if (avoidedBuckets.has("breathable")) score -= breathable * 10;
+  if (avoidedBuckets.has("insulating")) score -= insulating * 10;
+  if (avoidedBuckets.has("technical")) score -= technical * 8;
+  if (avoidedBuckets.has("refined")) score -= refined * 7;
+  if (avoidedBuckets.has("rugged")) score -= rugged * 6;
+  if (avoidedBuckets.has("absorbent")) score -= absorbent * 10;
 
   if (weatherSet.has("hot") || weatherSet.has("warm")) {
     score += breathable * 14;
@@ -980,6 +1367,46 @@ const computeMaterialIntentScore = ({
   if (isWet) {
     score += technical * 14;
     score -= absorbent * 8;
+  }
+
+  if (weatherProfile?.wetSurfaceRisk === "high" && (category === "outerwear" || category === "footwear")) {
+    score += technical * 16;
+    score += rugged * 6;
+    score -= absorbent * 14;
+  } else if (weatherProfile?.wetSurfaceRisk === "medium") {
+    score += technical * 8;
+    score -= absorbent * 6;
+  }
+
+  if (category === "outerwear") {
+    if (weatherProfile?.tempBand === "hot" || weatherProfile?.tempBand === "warm") {
+      score -= insulating * 12;
+      score += breathable * 6;
+    }
+    if (weatherProfile?.tempBand === "cold" || weatherProfile?.tempBand === "cool") {
+      score += insulating * 10;
+    }
+  }
+
+  if (category === "top" || category === "bottom") {
+    if (weatherProfile?.tempBand === "hot" || weatherProfile?.tempBand === "warm") {
+      score += breathable * 10;
+      score -= insulating * 8;
+    }
+    if (weatherProfile?.tempBand === "cold" || weatherProfile?.tempBand === "cool") {
+      score += insulating * 8;
+    }
+  }
+
+  if (category === "footwear") {
+    if (weatherProfile?.wetSurfaceRisk === "high") {
+      score += technical * 10;
+      score += rugged * 8;
+      score -= absorbent * 14;
+    }
+    if (weatherProfile?.tempBand === "hot") {
+      score += breathable * 4;
+    }
   }
 
   const placeSignalsTechnical =
@@ -1035,12 +1462,14 @@ const deriveStylingFromContext = ({
   place,
   timeOfDay,
   weatherContext,
+  weatherProfile,
 }: {
   weather: string[];
   occasion: string[];
   place: string[];
   timeOfDay: string[];
   weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
 }): { formality: string | null; style: string[] } => {
   const formalityScores = new Map<string, number>();
   const styleScores = new Map<string, number>();
@@ -1060,7 +1489,7 @@ const deriveStylingFromContext = ({
   const occasionSet = new Set(occasion.map((value) => value.toLowerCase()));
   const placeSet = new Set(place.map((value) => value.toLowerCase()));
   const timeSet = new Set(timeOfDay.map((value) => value.toLowerCase()));
-  const isWet = inferWetConditions(weatherContext);
+  const isWet = inferWetConditions(weatherContext, weatherProfile);
 
   if (occasionSet.has("black tie / evening wear") || occasionSet.has("ceremonial / wedding")) {
     addFormality("Formal", 8);
@@ -1203,19 +1632,167 @@ const deriveStylingFromContext = ({
   };
 };
 
-const buildCanonicalIntentFromContext = ({
+const deriveMaterialTargetsFromContext = ({
+  weather,
+  occasion,
+  place,
+  timeOfDay,
+  weatherContext,
+  weatherProfile,
+}: {
+  weather: string[];
+  occasion: string[];
+  place: string[];
+  timeOfDay: string[];
+  weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+}): { prefer: string[]; avoid: string[] } => {
+  const prefer = new Set<string>();
+  const avoid = new Set<string>();
+
+  const weatherSet = new Set(weather.map((value) => value.toLowerCase()));
+  const placeSet = new Set(place.map((value) => value.toLowerCase()));
+  const occasionSet = new Set(occasion.map((value) => value.toLowerCase()));
+  const timeSet = new Set(timeOfDay.map((value) => value.toLowerCase()));
+  const isWet = inferWetConditions(weatherContext, weatherProfile);
+  const wetRisk = weatherProfile?.wetSurfaceRisk ?? (isWet ? "high" : "low");
+  const isWarmContext =
+    weatherSet.has("hot") ||
+    weatherSet.has("warm") ||
+    weatherProfile?.tempBand === "hot" ||
+    weatherProfile?.tempBand === "warm";
+  const isColdContext =
+    weatherSet.has("cold") ||
+    weatherSet.has("cool") ||
+    weatherProfile?.tempBand === "cold" ||
+    weatherProfile?.tempBand === "cool";
+
+  if (isWarmContext) {
+    prefer.add("breathable");
+    avoid.add("insulating");
+  }
+  if (isColdContext) {
+    prefer.add("insulating");
+  }
+  if (wetRisk === "high" || wetRisk === "medium") {
+    prefer.add("technical");
+    avoid.add("absorbent");
+  }
+
+  const technicalPlace =
+    placeSet.has("transit hub / airport") ||
+    placeSet.has("wilderness") ||
+    placeSet.has("workshop") ||
+    placeSet.has("coastal / beach");
+  if (technicalPlace) {
+    prefer.add("technical");
+    prefer.add("rugged");
+  }
+
+  const refinedPlace =
+    placeSet.has("office / boardroom") ||
+    placeSet.has("metropolitan / city") ||
+    placeSet.has("creative studio / atelier");
+  if (refinedPlace) {
+    prefer.add("refined");
+  }
+
+  const refinedOccasion =
+    occasionSet.has("black tie / evening wear") ||
+    occasionSet.has("business formal") ||
+    occasionSet.has("ceremonial / wedding") ||
+    occasionSet.has("date night / intimate dinner");
+  if (refinedOccasion) {
+    prefer.add("refined");
+    if (wetRisk === "low") {
+      avoid.add("technical");
+    }
+  }
+
+  const technicalOccasion =
+    occasionSet.has("active transit / commuting") ||
+    occasionSet.has("active rugged / field sports") ||
+    occasionSet.has("manual labor / craft");
+  if (technicalOccasion) {
+    prefer.add("technical");
+    prefer.add("rugged");
+  }
+
+  if (timeSet.has("night") || timeSet.has("evening")) {
+    prefer.add("refined");
+  }
+  if (
+    (timeSet.has("morning") || timeSet.has("afternoon") || timeSet.has("all day")) &&
+    !isColdContext &&
+    wetRisk === "low"
+  ) {
+    prefer.add("breathable");
+  }
+
+  if (isColdContext || wetRisk !== "low") {
+    prefer.delete("breathable");
+  }
+  if (isWarmContext && wetRisk === "low") {
+    prefer.delete("insulating");
+  }
+  if (wetRisk !== "low") {
+    avoid.delete("technical");
+    avoid.add("absorbent");
+  }
+
+  return {
+    prefer: Array.from(prefer),
+    avoid: Array.from(avoid),
+  };
+};
+
+const buildDerivedProfileFromContext = ({
   context,
   weatherContext,
+  weatherProfile,
 }: {
   context: ContextIntent;
   weatherContext?: string | null;
-}): CanonicalIntent => {
+  weatherProfile?: WeatherProfile | null;
+}): DerivedProfile => {
   const derivedStyling = deriveStylingFromContext({
     weather: context.weather,
     occasion: context.occasion,
     place: context.place,
     timeOfDay: context.timeOfDay,
     weatherContext,
+    weatherProfile,
+  });
+
+  return {
+    formality: derivedStyling.formality,
+    style: derivedStyling.style,
+    materialTargets: deriveMaterialTargetsFromContext({
+      weather: context.weather,
+      occasion: context.occasion,
+      place: context.place,
+      timeOfDay: context.timeOfDay,
+      weatherContext,
+      weatherProfile,
+    }),
+  };
+};
+
+const buildCanonicalIntentFromContext = ({
+  context,
+  weatherContext,
+  weatherProfile,
+  derivedProfile,
+}: {
+  context: ContextIntent;
+  weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
+}): CanonicalIntent => {
+  const resolvedDerivedProfile = derivedProfile ?? buildDerivedProfileFromContext({
+    context,
+    weatherContext,
+    weatherProfile,
   });
 
   return {
@@ -1223,53 +1800,237 @@ const buildCanonicalIntentFromContext = ({
     occasion: context.occasion,
     place: context.place,
     timeOfDay: context.timeOfDay,
-    formality: derivedStyling.formality,
-    style: derivedStyling.style,
+    formality: resolvedDerivedProfile.formality,
+    style: resolvedDerivedProfile.style,
     notes: context.notes,
   };
+};
+
+type GarmentHardFailReason =
+  | "weather_mismatch"
+  | "occasion_mismatch"
+  | "place_mismatch"
+  | "wet_material_conflict"
+  | "wet_weather_not_rain_ready";
+
+const evaluateGarmentHardConstraints = (
+  garment: Pick<
+    CompactGarment,
+    "type" | "features" | "material_composition" | "suitable_weather" | "suitable_occasions" | "suitable_places"
+  >,
+  intent: CanonicalIntent,
+  options?: { weatherContext?: string | null; weatherProfile?: WeatherProfile | null }
+): {
+  passes: boolean;
+  reasons: GarmentHardFailReason[];
+  weatherMatch: boolean;
+  occasionMatch: boolean;
+  placeMatch: boolean;
+  wetWeatherSafetyGateActive: boolean;
+  rainReady: boolean | null;
+  rainReadyReason: string | null;
+} => {
+  const reasons: GarmentHardFailReason[] = [];
+  const weatherMatch =
+    intent.weather.length === 0 ||
+    Boolean(intersectionMatches(garment.suitable_weather ?? [], intent.weather, { allSeasonAlias: "all season" }));
+  const occasionMatch =
+    intent.occasion.length === 0 ||
+    Boolean(intersectionMatches(garment.suitable_occasions ?? [], intent.occasion));
+  const placeMatch =
+    intent.place.length === 0 ||
+    Boolean(intersectionMatches(garment.suitable_places ?? [], intent.place));
+
+  if (!weatherMatch) reasons.push("weather_mismatch");
+  if (!occasionMatch) reasons.push("occasion_mismatch");
+  if (!placeMatch) reasons.push("place_mismatch");
+
+  const wetWeatherSafety = assessWetWeatherSafety(
+    {
+      type: garment.type,
+      features: garment.features,
+      material_composition: garment.material_composition,
+    },
+    options
+  );
+  if (wetWeatherSafety.gateActive && wetWeatherSafety.applicable && wetWeatherSafety.rainReady === false) {
+    reasons.push("wet_weather_not_rain_ready");
+  }
+
+  const category = categorizeType(garment.type);
+  const wetRisk = options?.weatherProfile?.wetSurfaceRisk ?? (inferWetConditions(options?.weatherContext) ? "high" : "low");
+  if ((category === "outerwear" || category === "footwear") && (wetRisk === "high" || wetRisk === "medium")) {
+    const technicalShare = materialBucketShare(garment.material_composition, "technical");
+    const absorbentShare = materialBucketShare(garment.material_composition, "absorbent");
+    const failsHighWet = wetRisk === "high" && absorbentShare > 0.55 && technicalShare < 0.2;
+    const failsMediumWet = wetRisk === "medium" && absorbentShare > 0.6 && technicalShare < 0.15;
+    if (failsHighWet || failsMediumWet) {
+      reasons.push("wet_material_conflict");
+    }
+  }
+
+  return {
+    passes: reasons.length === 0,
+    reasons,
+    weatherMatch,
+    occasionMatch,
+    placeMatch,
+    wetWeatherSafetyGateActive: wetWeatherSafety.gateActive,
+    rainReady: wetWeatherSafety.rainReady,
+    rainReadyReason: wetWeatherSafety.reason,
+  };
+};
+
+const missingWetSafeCategoriesFromWardrobe = (
+  wardrobe: CompactGarment[],
+  intent: CanonicalIntent,
+  options: { weatherContext?: string | null; weatherProfile?: WeatherProfile | null },
+  requiredCategories: GarmentCategory[] = ["outerwear", "footwear"]
+): GarmentCategory[] => {
+  if (!isWetWeatherSafetyGateActive(options.weatherContext, options.weatherProfile)) {
+    return [];
+  }
+
+  const present = new Set(
+    wardrobe
+      .filter((garment) => requiredCategories.includes(categorizeType(garment.type)))
+      .filter((garment) =>
+        evaluateGarmentHardConstraints(
+          {
+            type: garment.type,
+            features: garment.features,
+            material_composition: garment.material_composition,
+            suitable_weather: garment.suitable_weather,
+            suitable_occasions: garment.suitable_occasions,
+            suitable_places: garment.suitable_places,
+          },
+          intent,
+          options
+        ).passes
+      )
+      .map((garment) => categorizeType(garment.type))
+  );
+
+  return requiredCategories.filter((category) => !present.has(category));
 };
 
 const scoreGarmentForIntent = (
   garment: Pick<
     CompactGarment,
-    "style" | "formality" | "material_composition" | "suitable_weather" | "suitable_occasions" | "suitable_places" | "suitable_time_of_day"
+    "type" | "style" | "formality" | "features" | "material_composition" | "suitable_weather" | "suitable_occasions" | "suitable_places" | "suitable_time_of_day"
   >,
   intent: CanonicalIntent,
-  options?: { weatherContext?: string | null }
+  options?: { weatherContext?: string | null; weatherProfile?: WeatherProfile | null; derivedProfile?: DerivedProfile | null }
 ): number => {
+  const category = categorizeType(garment.type);
+  const hardEvaluation = evaluateGarmentHardConstraints(garment, intent, {
+    weatherContext: options?.weatherContext,
+    weatherProfile: options?.weatherProfile,
+  });
+  if (!hardEvaluation.passes) {
+    return -10000 - (hardEvaluation.reasons.length * 250);
+  }
+
   let score = 0;
 
-  if (intent.weather.length > 0 && intersectionMatches(garment.suitable_weather ?? [], intent.weather, { allSeasonAlias: "all season" })) {
-    score += 16;
+  if (hardEvaluation.weatherMatch) {
+    score += 40;
   }
-  if (intent.occasion.length > 0 && intersectionMatches(garment.suitable_occasions ?? [], intent.occasion)) {
+  if (hardEvaluation.occasionMatch) {
     score += 24;
   }
-  if (intent.place.length > 0 && intersectionMatches(garment.suitable_places ?? [], intent.place)) {
+  if (hardEvaluation.placeMatch) {
     score += 24;
   }
   if (intent.timeOfDay.length > 0 && intersectionMatches(garment.suitable_time_of_day ?? [], intent.timeOfDay, { allDayAlias: "all day" })) {
-    score += 12;
+    score += 10;
   }
   if (intent.formality && normalize(garment.formality).toLowerCase() === intent.formality.toLowerCase()) {
-    score += 12;
+    score += 8;
   }
   if (intent.style.length > 0 && intent.style.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase())) {
-    score += 12;
+    score += 6;
   }
   score += computeMaterialIntentScore({
     materialComposition: garment.material_composition,
     intent,
+    category,
     weatherContext: options?.weatherContext,
+    weatherProfile: options?.weatherProfile,
+    derivedProfile: options?.derivedProfile,
   });
 
   return score;
 };
 
+const buildLineupRuleTrace = ({
+  lineup,
+  intent,
+  weatherContext,
+  weatherProfile,
+  derivedProfile,
+}: {
+  lineup: Array<Pick<Garment, "id" | "type" | "model" | "features" | "suitable_weather" | "suitable_occasions" | "suitable_places" | "suitable_time_of_day" | "formality" | "style" | "material_composition">>;
+  intent: CanonicalIntent;
+  weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
+}) =>
+  lineup.map((garment) => {
+    const category = categorizeType(garment.type);
+    const hardEvaluation = evaluateGarmentHardConstraints(
+      {
+        type: garment.type,
+        features: garment.features,
+        material_composition: garment.material_composition,
+        suitable_weather: garment.suitable_weather,
+        suitable_occasions: garment.suitable_occasions,
+        suitable_places: garment.suitable_places,
+      },
+      intent,
+      {
+        weatherContext,
+        weatherProfile,
+      }
+    );
+    const materialScore = computeMaterialIntentScore({
+      materialComposition: garment.material_composition,
+      intent,
+      category,
+      weatherContext,
+      weatherProfile,
+      derivedProfile,
+    });
+
+    return {
+      garmentId: garment.id,
+      category,
+      hardPass: hardEvaluation.passes,
+      hardFailReasons: hardEvaluation.reasons,
+      weatherMatch: hardEvaluation.weatherMatch,
+      occasionMatch: hardEvaluation.occasionMatch,
+      placeMatch: hardEvaluation.placeMatch,
+      wetWeatherSafetyGateActive: hardEvaluation.wetWeatherSafetyGateActive,
+      rainReady: hardEvaluation.rainReady,
+      rainReadyReason: hardEvaluation.rainReadyReason,
+      timeMatch:
+        intent.timeOfDay.length === 0 ||
+        Boolean(intersectionMatches(garment.suitable_time_of_day ?? [], intent.timeOfDay, { allDayAlias: "all day" })),
+      formalityMatch:
+        !intent.formality || normalize(garment.formality).toLowerCase() === intent.formality.toLowerCase(),
+      styleMatch:
+        intent.style.length === 0 ||
+        intent.style.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase()),
+      materialScore,
+    };
+  });
+
 const buildTravelPromptWardrobe = ({
   eligibleWardrobe,
   dayIntent,
   weatherContext,
+  weatherProfile,
+  derivedProfile,
   usedGarmentIds,
   recentLookHistory,
   requiredIds,
@@ -1277,13 +2038,19 @@ const buildTravelPromptWardrobe = ({
   eligibleWardrobe: CompactGarment[];
   dayIntent: CanonicalIntent;
   weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
   usedGarmentIds: Set<number>;
   recentLookHistory: Array<{ date: string; ids: number[] }>;
   requiredIds?: number[];
 }): CompactGarment[] => {
   const recentIds = new Set(recentLookHistory.flatMap((item) => item.ids));
   const scored = eligibleWardrobe.map((garment) => {
-    const intentScore = scoreGarmentForIntent(garment, dayIntent, { weatherContext });
+    const intentScore = scoreGarmentForIntent(garment, dayIntent, {
+      weatherContext,
+      weatherProfile,
+      derivedProfile,
+    });
     const noveltyBonus = usedGarmentIds.has(garment.id) ? -12 : 18;
     const recentPenalty = recentIds.has(garment.id) ? -8 : 0;
     const favoriteBonus = garment.favorite ? 4 : 0;
@@ -1347,6 +2114,8 @@ const enforceCoreSilhouetteFromPool = ({
   isTravelDay,
   intent,
   weatherContext,
+  weatherProfile,
+  derivedProfile,
   requiredCategories = CORE_SILHOUETTE_CATEGORIES,
 }: {
   ids: number[];
@@ -1359,6 +2128,8 @@ const enforceCoreSilhouetteFromPool = ({
   isTravelDay: boolean;
   intent: CanonicalIntent;
   weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
   requiredCategories?: GarmentCategory[];
 }): number[] => {
   const blockedIdSet = new Set(blockedIds);
@@ -1372,8 +2143,16 @@ const enforceCoreSilhouetteFromPool = ({
   const selectedSet = new Set(selected);
 
   const candidateSort = (left: CompactGarment, right: CompactGarment) => {
-    const leftScore = scoreGarmentForIntent(left, intent, { weatherContext }) + (usedGarmentIds.has(left.id) ? 0 : 25) + (left.favorite ? 5 : 0);
-    const rightScore = scoreGarmentForIntent(right, intent, { weatherContext }) + (usedGarmentIds.has(right.id) ? 0 : 25) + (right.favorite ? 5 : 0);
+    const leftScore = scoreGarmentForIntent(left, intent, {
+      weatherContext,
+      weatherProfile,
+      derivedProfile,
+    }) + (usedGarmentIds.has(left.id) ? 0 : 25) + (left.favorite ? 5 : 0);
+    const rightScore = scoreGarmentForIntent(right, intent, {
+      weatherContext,
+      weatherProfile,
+      derivedProfile,
+    }) + (usedGarmentIds.has(right.id) ? 0 : 25) + (right.favorite ? 5 : 0);
     return rightScore - leftScore;
   };
 
@@ -1420,6 +2199,8 @@ const diversifyLineupFromPool = ({
   isTravelDay,
   intent,
   weatherContext,
+  weatherProfile,
+  derivedProfile,
   requiredCategories = CORE_SILHOUETTE_CATEGORIES,
 }: {
   ids: number[];
@@ -1436,6 +2217,8 @@ const diversifyLineupFromPool = ({
   isTravelDay: boolean;
   intent: CanonicalIntent;
   weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
   requiredCategories?: GarmentCategory[];
 }): number[] => {
   const historyIds = [
@@ -1500,8 +2283,16 @@ const diversifyLineupFromPool = ({
         return true;
       })
       .sort((left, right) => {
-        const leftScore = scoreGarmentForIntent(left, intent, { weatherContext }) + (usedGarmentIds.has(left.id) ? 0 : 30) + (left.favorite ? 5 : 0);
-        const rightScore = scoreGarmentForIntent(right, intent, { weatherContext }) + (usedGarmentIds.has(right.id) ? 0 : 30) + (right.favorite ? 5 : 0);
+        const leftScore = scoreGarmentForIntent(left, intent, {
+          weatherContext,
+          weatherProfile,
+          derivedProfile,
+        }) + (usedGarmentIds.has(left.id) ? 0 : 30) + (left.favorite ? 5 : 0);
+        const rightScore = scoreGarmentForIntent(right, intent, {
+          weatherContext,
+          weatherProfile,
+          derivedProfile,
+        }) + (usedGarmentIds.has(right.id) ? 0 : 30) + (right.favorite ? 5 : 0);
         return rightScore - leftScore;
       });
 
@@ -1529,6 +2320,8 @@ const normalizeToFixedCategoryLook = ({
   garmentCategoryById,
   intent,
   weatherContext,
+  weatherProfile,
+  derivedProfile,
   requiredCategories,
   recentUsedIds,
   anchorGarmentId,
@@ -1540,6 +2333,8 @@ const normalizeToFixedCategoryLook = ({
   garmentCategoryById: Map<number, GarmentCategory>;
   intent: CanonicalIntent;
   weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
   requiredCategories: GarmentCategory[];
   recentUsedIds?: Set<number>;
   anchorGarmentId?: number | null;
@@ -1565,6 +2360,8 @@ const normalizeToFixedCategoryLook = ({
     isTravelDay: true,
     intent,
     weatherContext,
+    weatherProfile,
+    derivedProfile,
     requiredCategories,
   });
 
@@ -1615,7 +2412,11 @@ const normalizeToFixedCategoryLook = ({
           ? (recentUsedIds.has(id) ? -14 : 8)
           : 0;
         const score =
-          scoreGarmentForIntent(garment, intent, { weatherContext }) +
+          scoreGarmentForIntent(garment, intent, {
+            weatherContext,
+            weatherProfile,
+            derivedProfile,
+          }) +
           (garment.favorite ? 4 : 0) +
           providedBonus +
           anchorBonus +
@@ -1665,7 +2466,7 @@ const destinationLooksBeachFriendly = (destination: string): boolean => {
 const computeObjectiveMatchScore = (
   lineup: Garment[],
   intent: CanonicalIntent,
-  options?: { weatherContext?: string | null }
+  options?: { weatherContext?: string | null; weatherProfile?: WeatherProfile | null; derivedProfile?: DerivedProfile | null }
 ): number => {
   if (lineup.length === 0) return 0;
 
@@ -1707,7 +2508,10 @@ const computeObjectiveMatchScore = (
     computeMaterialIntentScore({
       materialComposition: garment.material_composition,
       intent,
+      category: categorizeType(garment.type),
       weatherContext: options?.weatherContext,
+      weatherProfile: options?.weatherProfile,
+      derivedProfile: options?.derivedProfile,
     })
   );
   if (materialScores.length > 0) {
@@ -1733,6 +2537,8 @@ const toValidatedSingleLookCandidate = ({
   ids,
   intent,
   weatherContext,
+  weatherProfile,
+  derivedProfile,
   recentUsedIds,
   anchorGarmentId,
   anchorMode,
@@ -1745,6 +2551,8 @@ const toValidatedSingleLookCandidate = ({
   ids: number[];
   intent: CanonicalIntent;
   weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
   recentUsedIds?: Set<number>;
   anchorGarmentId?: number | null;
   anchorMode?: AnchorMode;
@@ -1761,6 +2569,8 @@ const toValidatedSingleLookCandidate = ({
     garmentCategoryById,
     intent,
     weatherContext,
+    weatherProfile,
+    derivedProfile,
     requiredCategories: SINGLE_REQUIRED_CATEGORIES,
     recentUsedIds,
     anchorGarmentId,
@@ -1776,12 +2586,30 @@ const toValidatedSingleLookCandidate = ({
 
   const lineupGarments = normalizedIds.map((id) => garmentById.get(id)!).filter(Boolean);
   if (lineupGarments.length !== SINGLE_REQUIRED_CATEGORIES.length) return null;
-  const hasWeatherMismatch = lineupGarments.some((garment) =>
-    !matchesWeatherIntent(garment.suitable_weather, intent.weather)
+  const hasHardConstraintMismatch = lineupGarments.some((garment) =>
+    !evaluateGarmentHardConstraints(
+      {
+        type: garment.type,
+        features: garment.features,
+        material_composition: garment.material_composition,
+        suitable_weather: garment.suitable_weather,
+        suitable_occasions: garment.suitable_occasions,
+        suitable_places: garment.suitable_places,
+      },
+      intent,
+      {
+        weatherContext,
+        weatherProfile,
+      }
+    ).passes
   );
-  if (hasWeatherMismatch) return null;
+  if (hasHardConstraintMismatch) return null;
 
-  const matchScore = computeObjectiveMatchScore(lineupGarments, intent, { weatherContext });
+  const matchScore = computeObjectiveMatchScore(lineupGarments, intent, {
+    weatherContext,
+    weatherProfile,
+    derivedProfile,
+  });
   const roundedModelConfidence = Math.max(0, Math.min(100, Math.round(modelConfidence)));
   const confidence = Math.max(
     20,
@@ -1809,6 +2637,8 @@ const toValidatedSingleLookCandidate = ({
 const buildDeterministicSingleLookFallbackCandidate = ({
   intent,
   weatherContext,
+  weatherProfile,
+  derivedProfile,
   recentUsedIds,
   avoidSignatures,
   anchorGarmentId,
@@ -1819,6 +2649,8 @@ const buildDeterministicSingleLookFallbackCandidate = ({
 }: {
   intent: CanonicalIntent;
   weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
   recentUsedIds?: Set<number>;
   avoidSignatures?: Set<string>;
   anchorGarmentId?: number | null;
@@ -1836,7 +2668,11 @@ const buildDeterministicSingleLookFallbackCandidate = ({
       .map((garment) => ({
         garment,
         score:
-          scoreGarmentForIntent(garment, intent, { weatherContext }) +
+          scoreGarmentForIntent(garment, intent, {
+            weatherContext,
+            weatherProfile,
+            derivedProfile,
+          }) +
           (garment.favorite ? 6 : 0) +
           (recentUsedIds?.has(garment.id) ? -14 : 8),
       }))
@@ -1854,6 +2690,8 @@ const buildDeterministicSingleLookFallbackCandidate = ({
     ids: selected,
     intent,
     weatherContext,
+    weatherProfile,
+    derivedProfile,
     recentUsedIds,
     anchorGarmentId,
     anchorMode,
@@ -1881,6 +2719,22 @@ type TravelDayHistoryEntry = {
   ids: number[];
 };
 
+type SingleFeedbackSignalRow = {
+  signature: string;
+  ids: number[];
+  reason: string;
+};
+
+type SingleFeedbackSignals = {
+  penalizedSignatures: Set<string>;
+  penalizedGarmentIds: Set<number>;
+  rainMismatchSignal: boolean;
+  materialMismatchSignal: boolean;
+  formalityMismatchSignal: boolean;
+  styleMismatchSignal: boolean;
+  timeMismatchSignal: boolean;
+};
+
 const parseHistoryIds = (raw: string): number[] => {
   try {
     const parsed = JSON.parse(raw);
@@ -1891,6 +2745,48 @@ const parseHistoryIds = (raw: string): number[] => {
   } catch {
     return [];
   }
+};
+
+const buildSingleFeedbackSignals = (rows: SingleFeedbackSignalRow[]): SingleFeedbackSignals => {
+  const penalizedSignatures = new Set(rows.map((row) => row.signature).filter(Boolean));
+  const penalizedGarmentIds = new Set(rows.flatMap((row) => row.ids));
+
+  let rainMismatchSignal = false;
+  let materialMismatchSignal = false;
+  let formalityMismatchSignal = false;
+  let styleMismatchSignal = false;
+  let timeMismatchSignal = false;
+
+  for (const row of rows) {
+    const reason = row.reason.toLowerCase();
+    if (
+      /\b(rain|rainy|wet|waterproof|water-resistant|water resistant|drizzle|soaked|umbrella)\b/.test(reason)
+    ) {
+      rainMismatchSignal = true;
+    }
+    if (/\b(material|fabric|textile|tweed|canvas|absorbent|technical)\b/.test(reason)) {
+      materialMismatchSignal = true;
+    }
+    if (/\b(formality|too formal|too casual|dressy|underdressed|overdressed)\b/.test(reason)) {
+      formalityMismatchSignal = true;
+    }
+    if (/\b(style|vibe|minimalist|classic|sporty|workwear)\b/.test(reason)) {
+      styleMismatchSignal = true;
+    }
+    if (/\b(time|all day|morning|afternoon|evening|night)\b/.test(reason)) {
+      timeMismatchSignal = true;
+    }
+  }
+
+  return {
+    penalizedSignatures,
+    penalizedGarmentIds,
+    rainMismatchSignal,
+    materialMismatchSignal,
+    formalityMismatchSignal,
+    styleMismatchSignal,
+    timeMismatchSignal,
+  };
 };
 
 const normalizeFingerprintSegment = (value: string): string =>
@@ -1914,6 +2810,29 @@ const buildTravelRequestFingerprint = ({
     normalizeFingerprintSegment(endDate),
   ].join("|");
 
+const buildSingleRequestFingerprint = ({
+  weather,
+  occasion,
+  place,
+  timeOfDay,
+  locationHint,
+}: {
+  weather: string[];
+  occasion: string[];
+  place: string[];
+  timeOfDay: string[];
+  locationHint?: string | null;
+}): string =>
+  [
+    "single",
+    normalizeFingerprintSegment(locationHint ?? ""),
+    normalizeFingerprintSegment(weather.join(",")),
+    normalizeFingerprintSegment(occasion.join(",")),
+    normalizeFingerprintSegment(place.join(",")),
+    normalizeFingerprintSegment(timeOfDay.join(",")),
+    normalizeFingerprintSegment(new Date().toISOString().slice(0, 10)),
+  ].join("|");
+
 const getRecentSingleLookHistory = async (ownerKey: string): Promise<SingleLookHistoryEntry[]> => {
   const rows = await sql`
     SELECT lineup_signature, garment_ids_json
@@ -1928,6 +2847,43 @@ const getRecentSingleLookHistory = async (ownerKey: string): Promise<SingleLookH
     signature: normalize(row.lineup_signature),
     ids: parseHistoryIds(normalize(row.garment_ids_json)),
   }));
+};
+
+const getRecentSingleFeedbackSignals = async ({
+  ownerKey,
+  weatherProfile,
+  derivedProfile,
+}: {
+  ownerKey: string;
+  weatherProfile: WeatherProfile;
+  derivedProfile: DerivedProfile;
+}): Promise<SingleFeedbackSignals> => {
+  const rows = await sql`
+    SELECT lineup_signature, garment_ids_json, reason_text
+    FROM ai_look_feedback
+    WHERE owner_key = ${ownerKey}
+      AND mode = 'single'
+      AND vote = 'down'
+      AND (
+        COALESCE(NULLIF(weather_profile_json, ''), '{}')::jsonb->>'tempBand' = ${weatherProfile.tempBand}
+        OR COALESCE(NULLIF(weather_profile_json, ''), '{}')::jsonb->>'wetSurfaceRisk' = ${weatherProfile.wetSurfaceRisk}
+        OR COALESCE(NULLIF(derived_profile_json, ''), '{}')::jsonb->>'formality' = ${derivedProfile.formality ?? ""}
+      )
+    ORDER BY created_at DESC
+    LIMIT 80;
+  ` as Array<{
+    lineup_signature: string;
+    garment_ids_json: string;
+    reason_text: string | null;
+  }>;
+
+  const normalizedRows: SingleFeedbackSignalRow[] = rows.map((row) => ({
+    signature: normalize(row.lineup_signature),
+    ids: parseHistoryIds(normalize(row.garment_ids_json)),
+    reason: normalize(row.reason_text ?? ""),
+  }));
+
+  return buildSingleFeedbackSignals(normalizedRows);
 };
 
 const getTravelDayHistoryForRequest = async ({
@@ -2039,9 +2995,19 @@ const recentUsedIdSetFromHistory = (history: SingleLookHistoryEntry[]): Set<numb
 const computeSingleLookRerankScore = ({
   candidate,
   history,
+  intent,
+  weatherContext,
+  weatherProfile,
+  derivedProfile,
+  feedbackSignals,
 }: {
   candidate: SingleLookCandidate;
   history: SingleLookHistoryEntry[];
+  intent: CanonicalIntent;
+  weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
+  feedbackSignals?: SingleFeedbackSignals | null;
 }): number => {
   let score = candidate.confidence;
 
@@ -2056,15 +3022,93 @@ const computeSingleLookRerankScore = ({
     : 0;
   score -= Math.round(historyOverlap * 30);
 
+  if (feedbackSignals) {
+    if (feedbackSignals.penalizedSignatures.has(candidate.signature)) {
+      score -= 22;
+    }
+
+    const penalizedOverlapCount = candidate.selectedGarmentIds.filter((id) =>
+      feedbackSignals.penalizedGarmentIds.has(id)
+    ).length;
+    score -= Math.min(28, penalizedOverlapCount * 7);
+
+    const isWetContext = weatherProfile?.wetSurfaceRisk === "high" || weatherProfile?.wetSurfaceRisk === "medium";
+    if (isWetContext && (feedbackSignals.rainMismatchSignal || feedbackSignals.materialMismatchSignal)) {
+      let wetMaterialPenalty = 0;
+      for (const garment of candidate.lineupGarments) {
+        const category = categorizeType(garment.type);
+        if (category !== "outerwear" && category !== "footwear") continue;
+        const technicalShare = materialBucketShare(garment.material_composition, "technical");
+        const absorbentShare = materialBucketShare(garment.material_composition, "absorbent");
+        if (absorbentShare > 0.45 && technicalShare < 0.25) {
+          wetMaterialPenalty += 12;
+        }
+      }
+      score -= wetMaterialPenalty;
+    }
+
+    if (feedbackSignals.formalityMismatchSignal && derivedProfile?.formality) {
+      const mismatches = candidate.lineupGarments.filter(
+        (garment) => normalize(garment.formality).toLowerCase() !== derivedProfile.formality!.toLowerCase()
+      ).length;
+      score -= mismatches * 3;
+    }
+
+    if (feedbackSignals.styleMismatchSignal && (derivedProfile?.style.length ?? 0) > 0) {
+      const mismatches = candidate.lineupGarments.filter(
+        (garment) =>
+          !derivedProfile!.style.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase())
+      ).length;
+      score -= mismatches * 2;
+    }
+
+    if (feedbackSignals.timeMismatchSignal && intent.timeOfDay.length > 0) {
+      const mismatches = candidate.lineupGarments.filter(
+        (garment) =>
+          !Boolean(intersectionMatches(garment.suitable_time_of_day ?? [], intent.timeOfDay, { allDayAlias: "all day" }))
+      ).length;
+      score -= mismatches * 2;
+    }
+
+    if (feedbackSignals.materialMismatchSignal) {
+      const materialScores = candidate.lineupGarments.map((garment) =>
+        computeMaterialIntentScore({
+          materialComposition: garment.material_composition,
+          intent,
+          category: categorizeType(garment.type),
+          weatherContext,
+          weatherProfile,
+          derivedProfile,
+        })
+      );
+      const averageMaterialScore = materialScores.length > 0
+        ? materialScores.reduce((sum, value) => sum + value, 0) / materialScores.length
+        : 0;
+      if (averageMaterialScore < 0) {
+        score -= Math.round(Math.abs(averageMaterialScore));
+      }
+    }
+  }
+
   return score;
 };
 
 const chooseTopSingleLookCandidate = ({
   candidates,
   history,
+  intent,
+  weatherContext,
+  weatherProfile,
+  derivedProfile,
+  feedbackSignals,
 }: {
   candidates: SingleLookCandidate[];
   history: SingleLookHistoryEntry[];
+  intent: CanonicalIntent;
+  weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
+  feedbackSignals?: SingleFeedbackSignals | null;
 }): SingleLookCandidate | null => {
   if (candidates.length === 0) return null;
 
@@ -2094,6 +3138,11 @@ const chooseTopSingleLookCandidate = ({
       rerankScore: computeSingleLookRerankScore({
         candidate,
         history,
+        intent,
+        weatherContext,
+        weatherProfile,
+        derivedProfile,
+        feedbackSignals,
       }),
     }))
     .sort((left, right) => {
@@ -2249,25 +3298,66 @@ const isAllowedOrigin = (request: Request): boolean => {
 };
 
 export async function POST(request: Request) {
+  const requestId = randomUUID();
+  const toErrorDetails = (error: unknown) => {
+    if (error instanceof Error) {
+      return AI_LOOK_DEBUG
+        ? { message: error.message, stack: error.stack ?? null }
+        : { message: error.message };
+    }
+    return { message: String(error) };
+  };
+  const logInfo = (
+    event: string,
+    payload: Record<string, unknown>,
+    options?: { debugOnly?: boolean }
+  ) => {
+    if (options?.debugOnly !== false && !AI_LOOK_DEBUG) return;
+    console.info(event, JSON.stringify({ requestId, ...payload }));
+  };
+  const logWarn = (event: string, payload: Record<string, unknown>) => {
+    console.warn(event, JSON.stringify({ requestId, ...payload }));
+  };
+  const logError = (event: string, payload: Record<string, unknown>) => {
+    console.error(event, JSON.stringify({ requestId, ...payload }));
+  };
+  const responseJson = (
+    body: Record<string, unknown>,
+    init?: { status: number }
+  ) => NextResponse.json({ requestId, ...body }, init);
+
   try {
+    logInfo(
+      "[ai-look][request][received]",
+      {
+        method: request.method,
+        path: new URL(request.url).pathname,
+      },
+      { debugOnly: false }
+    );
+
     if (!isAllowedOrigin(request)) {
-      return NextResponse.json({ error: "Invalid request origin." }, { status: 403 });
+      logWarn("[ai-look][request][rejected-origin]", { reason: "invalid-origin" });
+      return responseJson({ error: "Invalid request origin." }, { status: 403 });
     }
 
     if (!(await isOwnerSession())) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      logWarn("[ai-look][request][rejected-auth]", { reason: "owner-session-required" });
+      return responseJson({ error: "Forbidden" }, { status: 403 });
     }
 
     const rawBody = await request.json();
     const parsedTravelBody = travelRequestSchema.safeParse(rawBody);
     const parsedSingleBody = singleLookRequestSchema.safeParse(rawBody);
     if (!parsedTravelBody.success && !parsedSingleBody.success) {
-      return NextResponse.json({ error: "Invalid AI look payload." }, { status: 400 });
+      logWarn("[ai-look][request][invalid-payload]", { reason: "schema-parse-failed" });
+      return responseJson({ error: "Invalid AI look payload." }, { status: 400 });
     }
 
     const ownerRateLimitKey = `owner:${process.env.EDITOR_OWNER_EMAIL?.toLowerCase() || "owner"}`;
     if (await isRateLimited(ownerRateLimitKey)) {
-      return NextResponse.json(
+      logWarn("[ai-look][request][rate-limited]", { ownerRateLimitKey });
+      return responseJson(
         { error: "Too many AI look requests. Please wait and try again." },
         { status: 429 }
       );
@@ -2276,7 +3366,8 @@ export async function POST(request: Request) {
     const wardrobeData = await getWardrobeData({ forceFresh: true });
 
     if (wardrobeData.length === 0) {
-      return NextResponse.json({ error: "Wardrobe is empty. Add garments first." }, { status: 400 });
+      logWarn("[ai-look][request][empty-wardrobe]", { ownerRateLimitKey });
+      return responseJson({ error: "Wardrobe is empty. Add garments first." }, { status: 400 });
     }
 
     const systemPrompt = await readFile(
@@ -2313,10 +3404,15 @@ export async function POST(request: Request) {
       const { destination, startDate, endDate, reason } = parsedTravelBody.data;
       const requestedDates = enumerateDateRange(startDate, endDate);
       if (requestedDates.length === 0) {
-        return NextResponse.json({ error: "Invalid date range." }, { status: 400 });
+        logWarn("[ai-look][travel][invalid-date-range]", { startDate, endDate });
+        return responseJson({ error: "Invalid date range." }, { status: 400 });
       }
       if (requestedDates.length > MAX_TRAVEL_PLAN_DAYS) {
-        return NextResponse.json(
+        logWarn("[ai-look][travel][range-too-large]", {
+          requestedDays: requestedDates.length,
+          maxDays: MAX_TRAVEL_PLAN_DAYS,
+        });
+        return responseJson(
           { error: `Travel range too large. Maximum supported range is ${MAX_TRAVEL_PLAN_DAYS} days.` },
           { status: 400 }
         );
@@ -2339,7 +3435,10 @@ export async function POST(request: Request) {
           requestFingerprint: travelRequestFingerprint,
         });
       } catch (error) {
-        console.warn("[ai-look][travel][history][read-failed]", error);
+        logWarn("[ai-look][travel][history][read-failed]", {
+          requestFingerprint: travelRequestFingerprint,
+          error: toErrorDetails(error),
+        });
       }
       const historicalTravelDaysByDate = new Map<string, TravelDayHistoryEntry[]>();
       for (const entry of historicalTravelDays) {
@@ -2347,13 +3446,13 @@ export async function POST(request: Request) {
         bucket.push(entry);
         historicalTravelDaysByDate.set(entry.dayDate, bucket);
       }
-      console.info(
+      logInfo(
         "[ai-look][travel][history][loaded]",
-        JSON.stringify({
+        {
           requestFingerprint: travelRequestFingerprint,
           rows: historicalTravelDays.length,
           distinctDates: historicalTravelDaysByDate.size,
-        })
+        }
       );
 
       const garmentById = new Map(wardrobeData.map((garment) => [garment.id, garment]));
@@ -2443,7 +3542,7 @@ export async function POST(request: Request) {
       });
 
       if (outerwearGarmentIds.length === 0) {
-        return NextResponse.json(
+        return responseJson(
           { error: "Cannot build travel pack: no outerwear (jacket/coat) available in wardrobe." },
           { status: 422 }
         );
@@ -2463,7 +3562,7 @@ export async function POST(request: Request) {
         );
 
       if (tripWideOuterwearCandidates.length === 0) {
-        return NextResponse.json(
+        return responseJson(
           { error: "Cannot build travel pack with one outerwear: no single jacket/coat satisfies all days (weather/place/occasion)." },
           { status: 422 }
         );
@@ -2475,6 +3574,7 @@ export async function POST(request: Request) {
         place: Array.from(new Set(dayConstraintPlans.flatMap((plan) => plan.strictConstraints.requiredPlaces))),
         timeOfDay: timeAllDay ? [timeAllDay] : [],
         weatherContext: weatherByDate.days.map((day) => day.summary).join(" "),
+        weatherProfile: weatherByDate.days[0]?.weatherProfile ?? null,
       });
 
       tripWideOuterwearCandidates.sort((left, right) => {
@@ -2502,7 +3602,24 @@ export async function POST(request: Request) {
         weatherContext: string;
         weatherStatus: "forecast" | "seasonal" | "failed";
         reusedGarmentIds: number[];
+        lineupSignature: string;
+        weatherProfile: WeatherProfile;
+        derivedProfile: DerivedProfile;
         interpretedIntent: CanonicalIntent;
+      }> = [];
+      const travelFinalDebugDays: Array<{
+        date: string;
+        lookName: string;
+        lineupSignature: string;
+        garments: Garment[];
+        rationale: string;
+        confidence: number;
+        modelConfidence: number;
+        matchScore: number;
+        weatherContext: string;
+        weatherProfile: WeatherProfile;
+        interpretedIntent: CanonicalIntent;
+        derivedProfile: DerivedProfile;
       }> = [];
       const skippedDays: Array<{ date: string; reason: string; weatherContext: string; weatherStatus: "forecast" | "seasonal" | "failed" }> = [];
       const travelDaysToPersist: Array<{ dayDate: string; dayIndex: number; signature: string; ids: number[] }> = [];
@@ -2611,12 +3728,22 @@ export async function POST(request: Request) {
             notes: normalize(interpretedTravelDayContext.notes) || fallbackDayContext.notes,
           };
         } catch (error) {
-          console.warn("Travel day intent interpretation fallback used:", error);
+          logWarn("[ai-look][travel][day-intent][fallback-used]", {
+            date: dayWeather.date,
+            error: toErrorDetails(error),
+          });
         }
 
+        const dayDerivedProfile = buildDerivedProfileFromContext({
+          context: dayContext,
+          weatherContext: dayWeather.summary,
+          weatherProfile: dayWeather.weatherProfile,
+        });
         const dayIntent = buildCanonicalIntentFromContext({
           context: dayContext,
           weatherContext: dayWeather.summary,
+          weatherProfile: dayWeather.weatherProfile,
+          derivedProfile: dayDerivedProfile,
         });
 
         const recentHistory = recentLookHistory.slice(-3);
@@ -2633,6 +3760,8 @@ export async function POST(request: Request) {
           eligibleWardrobe,
           dayIntent,
           weatherContext: dayWeather.summary,
+          weatherProfile: dayWeather.weatherProfile,
+          derivedProfile: dayDerivedProfile,
           usedGarmentIds,
           recentLookHistory,
           requiredIds: [
@@ -2644,13 +3773,13 @@ export async function POST(request: Request) {
         const hasHistoricalFreshPool =
           promptWardrobe.filter((garment) => !historicalUsedIdSet.has(garment.id)).length >= 6;
         if (dayHistoricalRows.length > 0) {
-          console.info(
+          logInfo(
             "[ai-look][travel][history][day-loaded]",
-            JSON.stringify({
+            {
               date: dayWeather.date,
               rows: dayHistoricalRows.length,
               signatures: historicalSignatures.size,
-            })
+            }
           );
         }
 
@@ -2810,6 +3939,8 @@ export async function POST(request: Request) {
             isTravelDay,
             intent: dayIntent,
             weatherContext: dayWeather.summary,
+            weatherProfile: dayWeather.weatherProfile,
+            derivedProfile: dayDerivedProfile,
             requiredCategories: TRAVEL_REQUIRED_CATEGORIES,
           });
 
@@ -2828,6 +3959,8 @@ export async function POST(request: Request) {
             isTravelDay,
             intent: dayIntent,
             weatherContext: dayWeather.summary,
+            weatherProfile: dayWeather.weatherProfile,
+            derivedProfile: dayDerivedProfile,
             requiredCategories: TRAVEL_REQUIRED_CATEGORIES,
           });
 
@@ -2899,12 +4032,12 @@ export async function POST(request: Request) {
             ...uniqueValidIds,
           ]));
           if (firstPassIsHistoricalDuplicate) {
-            console.info(
+            logInfo(
               "[ai-look][travel][history][retry-on-repeat]",
-              JSON.stringify({
+              {
                 date: dayWeather.date,
                 signature: firstPassSignature,
-              })
+              }
             );
           }
           generatedDay = await generateTravelDayLook(
@@ -2956,6 +4089,25 @@ export async function POST(request: Request) {
               if (!garment) return true;
               return !matchesWeatherIntent(garment.suitable_weather ?? [], dayPlan.weatherTags);
             });
+          const violatesHardConstraintRule = orderedIds.some((id) => {
+            const garment = garmentById.get(id);
+            if (!garment) return true;
+            return !evaluateGarmentHardConstraints(
+              {
+                type: garment.type,
+                features: garment.features,
+                material_composition: garment.material_composition,
+                suitable_weather: garment.suitable_weather,
+                suitable_occasions: garment.suitable_occasions,
+                suitable_places: garment.suitable_places,
+              },
+              dayIntent,
+              {
+                weatherContext: dayWeather.summary,
+                weatherProfile: dayWeather.weatherProfile,
+              }
+            ).passes;
+          });
           const violatesCoreSilhouette = !hasCoreSilhouetteFromIds(
             orderedIds,
             garmentCategoryById,
@@ -2982,6 +4134,7 @@ export async function POST(request: Request) {
             violatesPlaceRule,
             violatesOccasionRule,
             violatesWeatherRule,
+            violatesHardConstraintRule,
             violatesCoreSilhouette,
             violatesDuplicateLookRule,
             violatesHighOverlapRule,
@@ -3001,6 +4154,7 @@ export async function POST(request: Request) {
           violatesPlaceRule,
           violatesOccasionRule,
           violatesWeatherRule,
+          violatesHardConstraintRule,
           violatesCoreSilhouette,
           violatesDuplicateLookRule,
           violatesHighOverlapRule,
@@ -3041,6 +4195,7 @@ export async function POST(request: Request) {
               violatesPlaceRule,
               violatesOccasionRule,
               violatesWeatherRule,
+              violatesHardConstraintRule,
               violatesCoreSilhouette,
               violatesDuplicateLookRule,
               violatesHighOverlapRule,
@@ -3048,16 +4203,19 @@ export async function POST(request: Request) {
               historicalOverlap,
             } = computeDayViolations(relaxedNormalized.ids));
             generatedDay = relaxedGeneratedDay;
-            console.info(
+            logInfo(
               "[ai-look][travel][fallback][relaxed-diversity-attempted]",
-              JSON.stringify({
+              {
                 date: dayWeather.date,
                 signature,
                 resolvedCoreSilhouette: !violatesCoreSilhouette,
-              })
+              }
             );
           } catch (error) {
-            console.warn("[ai-look][travel][fallback][relaxed-diversity-failed]", error);
+            logWarn("[ai-look][travel][fallback][relaxed-diversity-failed]", {
+              date: dayWeather.date,
+              error: toErrorDetails(error),
+            });
           }
         }
 
@@ -3069,18 +4227,19 @@ export async function POST(request: Request) {
           violatesPlaceRule ||
           violatesOccasionRule ||
           violatesWeatherRule ||
+          violatesHardConstraintRule ||
           violatesCoreSilhouette ||
           violatesDuplicateLookRule ||
           violatesHighOverlapRule;
 
         if (violatesHistoricalRepeatRule && !hasStrictDayViolation) {
-          console.info(
+          logInfo(
             "[ai-look][travel][history][repeat-allowed]",
-            JSON.stringify({
+            {
               date: dayWeather.date,
               signature,
               historicalOverlap,
-            })
+            }
           );
           violatesHistoricalRepeatRule = false;
         }
@@ -3093,6 +4252,7 @@ export async function POST(request: Request) {
           violatesPlaceRule ||
           violatesOccasionRule ||
           violatesWeatherRule ||
+          violatesHardConstraintRule ||
           violatesCoreSilhouette ||
           violatesDuplicateLookRule ||
           violatesHighOverlapRule ||
@@ -3114,6 +4274,8 @@ export async function POST(request: Request) {
                       ? "Could not generate a sufficiently distinct look from previous days under current constraints."
                       : violatesHistoricalRepeatRule
                         ? "Could not generate a sufficiently distinct look from previous identical travel runs under current constraints."
+                      : violatesHardConstraintRule
+                        ? "Could not satisfy wet-weather safety rule (rain-ready outerwear/footwear required)."
                       : violatesPlaceRule || violatesOccasionRule || violatesWeatherRule
                         ? `Could not satisfy strict ${strictConstraints.label.toLowerCase()} weather/place/occasion constraints.`
                         : "Could not satisfy day constraints.",
@@ -3135,6 +4297,8 @@ export async function POST(request: Request) {
 
         const matchScore = computeObjectiveMatchScore(lineupGarments, dayIntent, {
           weatherContext: dayWeather.summary,
+          weatherProfile: dayWeather.weatherProfile,
+          derivedProfile: dayDerivedProfile,
         });
         const modelConfidence = Math.round(generatedDay.modelConfidence);
         const confidence = Math.max(
@@ -3170,32 +4334,75 @@ export async function POST(request: Request) {
           signature,
           ids: orderedIds,
         });
-        console.info(
+        logInfo(
           "[ai-look][travel][day-selected]",
-          JSON.stringify({
+          {
             date: dayWeather.date,
             signature,
             repeatedFromHistory: historicalSignatures.has(signature),
             historicalOverlap,
-          })
+            weatherProfile: dayWeather.weatherProfile,
+            ruleTrace: buildLineupRuleTrace({
+              lineup: lineupGarments,
+              intent: dayIntent,
+              weatherContext: dayWeather.summary,
+              weatherProfile: dayWeather.weatherProfile,
+              derivedProfile: dayDerivedProfile,
+            }),
+          }
+        );
+        const finalDayRationale = buildAlignedRationale({
+          lineupGarments,
+          intent: dayIntent,
+          weatherContext: dayWeather.summary,
+          contextLabel: `travel day in ${weatherByDate.locationLabel}`,
+        });
+        logInfo(
+          "[ai-look][travel][day-final-output]",
+          {
+            date: dayWeather.date,
+            lookName: generatedDay.lookName,
+            lineupSignature: signature,
+            garments: lineupGarments,
+            rationale: finalDayRationale,
+            confidence,
+            modelConfidence,
+            matchScore,
+            weatherContext: dayWeather.summary,
+            weatherProfile: dayWeather.weatherProfile,
+            interpretedIntent: dayIntent,
+            derivedProfile: dayDerivedProfile,
+          }
         );
         days.push({
           date: dayWeather.date,
           lookName: generatedDay.lookName,
           lineup,
-          rationale: buildAlignedRationale({
-            lineupGarments,
-            intent: dayIntent,
-            weatherContext: dayWeather.summary,
-            contextLabel: `travel day in ${weatherByDate.locationLabel}`,
-          }),
+          lineupSignature: signature,
+          rationale: finalDayRationale,
           confidence,
           modelConfidence,
           matchScore,
           weatherContext: dayWeather.summary,
           weatherStatus: dayWeather.status,
+          weatherProfile: dayWeather.weatherProfile,
+          derivedProfile: dayDerivedProfile,
           reusedGarmentIds,
           interpretedIntent: dayIntent,
+        });
+        travelFinalDebugDays.push({
+          date: dayWeather.date,
+          lookName: generatedDay.lookName,
+          lineupSignature: signature,
+          garments: lineupGarments,
+          rationale: finalDayRationale,
+          confidence,
+          modelConfidence,
+          matchScore,
+          weatherContext: dayWeather.summary,
+          weatherProfile: dayWeather.weatherProfile,
+          interpretedIntent: dayIntent,
+          derivedProfile: dayDerivedProfile,
         });
       }
 
@@ -3208,20 +4415,37 @@ export async function POST(request: Request) {
             reason,
             days: travelDaysToPersist,
           });
-          console.info(
+          logInfo(
             "[ai-look][travel][history][persisted]",
-            JSON.stringify({
+            {
               requestFingerprint: travelRequestFingerprint,
               rows: travelDaysToPersist.length,
-            })
+            }
           );
         } catch (error) {
-          console.warn("[ai-look][travel][history][write-failed]", error);
+          logWarn("[ai-look][travel][history][write-failed]", {
+            requestFingerprint: travelRequestFingerprint,
+            error: toErrorDetails(error),
+          });
         }
       }
 
-      return NextResponse.json({
+      logInfo(
+        "[ai-look][travel][final-output]",
+        {
+          requestFingerprint: travelRequestFingerprint,
+          destination: weatherByDate.locationLabel,
+          reason,
+          startDate,
+          endDate,
+          days: travelFinalDebugDays,
+          skippedDays,
+        }
+      );
+
+      return responseJson({
         mode: "travel",
+        requestFingerprint: travelRequestFingerprint,
         destination: weatherByDate.locationLabel,
         reason,
         startDate,
@@ -3237,7 +4461,8 @@ export async function POST(request: Request) {
     }
 
     if (!parsedSingleBody.success) {
-      return NextResponse.json({ error: "Invalid prompt payload." }, { status: 400 });
+      logWarn("[ai-look][single][invalid-payload]", { reason: "schema-parse-failed" });
+      return responseJson({ error: "Invalid prompt payload." }, { status: 400 });
     }
 
     const userPrompt = parsedSingleBody.data.prompt;
@@ -3260,6 +4485,7 @@ export async function POST(request: Request) {
               locationLabel: weather?.locationLabel ?? "",
               summary: weather?.summary ?? "",
               weather: weather?.weather ?? [],
+              weatherProfile: weather?.weatherProfile ?? null,
             };
           },
         }),
@@ -3269,17 +4495,18 @@ export async function POST(request: Request) {
       system: INTERPRETER_APPENDIX,
       prompt: `Canonical options:\n${JSON.stringify(canonicalOptions)}\n\nUser request:\n${userPrompt}`,
     });
-    console.info("[ai-look][single][step-1][interpreted-context]", JSON.stringify(interpretedContext));
+    logInfo("[ai-look][single][step-1][interpreted-context]", interpretedContext as Record<string, unknown>);
 
     const latestWeatherToolResult = [...toolResults]
       .reverse()
       .find((result) => result.type === "tool-result" && result.toolName === "getWeatherByLocation");
     const weatherOutput =
       latestWeatherToolResult && typeof latestWeatherToolResult.output === "object" && latestWeatherToolResult.output
-        ? latestWeatherToolResult.output as { summary?: string; weather?: string[] }
+        ? latestWeatherToolResult.output as { summary?: string; weather?: string[]; weatherProfile?: WeatherProfile | null }
         : null;
     let weatherContextSummary = normalize(weatherOutput?.summary);
     let resolvedWeatherTags = dedupeCanonicalWeather(weatherOutput?.weather ?? []);
+    let resolvedWeatherProfile: WeatherProfile | null = weatherOutput?.weatherProfile ?? null;
     let weatherStatus: WeatherContextStatus = "not_requested";
     let weatherContextSource: WeatherContextSource = weatherContextSummary ? "model_tool" : "none";
 
@@ -3304,6 +4531,7 @@ export async function POST(request: Request) {
                   locationLabel: weather?.locationLabel ?? "",
                   summary: weather?.summary ?? "",
                   weather: weather?.weather ?? [],
+                  weatherProfile: weather?.weatherProfile ?? null,
                 };
               },
             }),
@@ -3318,12 +4546,15 @@ export async function POST(request: Request) {
           .find((result) => result.type === "tool-result" && result.toolName === "getWeatherByLocation");
         const fallbackOutput =
           fallbackToolResult && typeof fallbackToolResult.output === "object" && fallbackToolResult.output
-            ? fallbackToolResult.output as { summary?: string; weather?: string[] }
+            ? fallbackToolResult.output as { summary?: string; weather?: string[]; weatherProfile?: WeatherProfile | null }
             : null;
         weatherContextSummary = normalize(fallbackOutput?.summary);
         const fallbackWeatherTags = dedupeCanonicalWeather(fallbackOutput?.weather ?? []);
         if (fallbackWeatherTags.length > 0) {
           resolvedWeatherTags = fallbackWeatherTags;
+        }
+        if (fallbackOutput?.weatherProfile) {
+          resolvedWeatherProfile = fallbackOutput.weatherProfile;
         }
         if (weatherContextSummary) {
           weatherContextSource = "forced_tool";
@@ -3340,11 +4571,17 @@ export async function POST(request: Request) {
         if (directWeatherTags.length > 0) {
           resolvedWeatherTags = directWeatherTags;
         }
+        if (directWeather?.weatherProfile) {
+          resolvedWeatherProfile = directWeather.weatherProfile;
+        }
         if (weatherContextSummary) {
           weatherContextSource = "direct_fetch";
         }
       } catch (error) {
-        console.warn("Direct weather fallback failed:", error);
+        logWarn("[ai-look][single][weather][direct-fetch-failed]", {
+          locationHint,
+          error: toErrorDetails(error),
+        });
       }
     }
 
@@ -3353,14 +4590,15 @@ export async function POST(request: Request) {
     } else if (locationHint) {
       weatherStatus = "failed";
     }
-    console.info(
+    logInfo(
       "[ai-look][single][step-1][weather-resolution]",
-      JSON.stringify({
+      {
         weatherStatus,
         weatherContextSource,
         locationHint: locationHint || null,
         resolvedWeatherTags,
-      })
+        weatherProfile: resolvedWeatherProfile,
+      }
     );
 
     const interpretedWeather = toCanonicalValues(interpretedContext.weather, WEATHER_OPTIONS);
@@ -3378,20 +4616,33 @@ export async function POST(request: Request) {
       timeOfDay: toCanonicalValues(interpretedContext.timeOfDay, TIME_OPTIONS),
       notes: canonicalNotes,
     };
-    console.info("[ai-look][single][step-1][canonical-context]", JSON.stringify(canonicalContext));
+    const canonicalWeatherProfile = resolvedWeatherProfile ?? buildFallbackWeatherProfile({
+      weatherTags: canonicalContext.weather,
+      summary: weatherContextSummary || canonicalNotes,
+      confidence: weatherContextSummary ? "medium" : "low",
+    });
+    logInfo("[ai-look][single][step-1][canonical-context]", { ...canonicalContext });
 
+    const derivedProfile = buildDerivedProfileFromContext({
+      context: canonicalContext,
+      weatherContext: weatherContextSummary || null,
+      weatherProfile: canonicalWeatherProfile,
+    });
     const canonicalIntent = buildCanonicalIntentFromContext({
       context: canonicalContext,
       weatherContext: weatherContextSummary || null,
+      weatherProfile: canonicalWeatherProfile,
+      derivedProfile,
     });
-    console.info(
+    logInfo(
       "[ai-look][single][step-1][derived-styling]",
-      JSON.stringify({
-        formality: canonicalIntent.formality,
-        style: canonicalIntent.style,
-      })
+      {
+        formality: derivedProfile.formality,
+        style: derivedProfile.style,
+        materialTargets: derivedProfile.materialTargets,
+      }
     );
-    console.info("[ai-look][single][step-1][canonical-intent]", JSON.stringify(canonicalIntent));
+    logInfo("[ai-look][single][step-1][canonical-intent]", { ...canonicalIntent });
 
     const garmentById = new Map(wardrobeData.map((garment) => [garment.id, garment]));
     const garmentCategoryById = new Map(
@@ -3403,7 +4654,7 @@ export async function POST(request: Request) {
     if (requestedAnchorGarmentId != null) {
       const anchorGarment = garmentById.get(requestedAnchorGarmentId);
       if (!anchorGarment) {
-        return NextResponse.json(
+        return responseJson(
           { error: `Anchored garment ${requestedAnchorGarmentId} was not found in your wardrobe.` },
           { status: 422 }
         );
@@ -3411,7 +4662,7 @@ export async function POST(request: Request) {
       const anchorCategory = garmentCategoryById.get(requestedAnchorGarmentId) ?? "other";
       const isAnchorCompatible = SINGLE_REQUIRED_CATEGORIES.includes(anchorCategory);
       if (!isAnchorCompatible && requestedAnchorMode === "strict") {
-        return NextResponse.json(
+        return responseJson(
           { error: `Strict anchor is not compatible with fixed look silhouette. Garment category: ${anchorCategory}.` },
           { status: 422 }
         );
@@ -3424,22 +4675,22 @@ export async function POST(request: Request) {
     } else {
       effectiveAnchorMode = "soft";
     }
-    console.info(
+    logInfo(
       "[ai-look][single][anchor][request]",
-      JSON.stringify({
+      {
         requestedAnchorGarmentId,
         requestedAnchorMode,
         effectiveAnchorGarmentId,
         effectiveAnchorMode,
         effectiveAnchorCategory,
-      })
+      }
     );
     const missingSingleCategories = missingCoreSilhouetteCategoriesFromWardrobe(
       compactWardrobe,
       SINGLE_REQUIRED_CATEGORIES
     );
     if (missingSingleCategories.length > 0) {
-      return NextResponse.json(
+      return responseJson(
         { error: `AI could not produce a complete look. Missing category data: ${missingSingleCategories.join(", ")}.` },
         { status: 422 }
       );
@@ -3451,9 +4702,26 @@ export async function POST(request: Request) {
     );
     if (missingWeatherCompatibleSingleCategories.length > 0) {
       const weatherLabel = canonicalIntent.weather.join(", ");
-      return NextResponse.json(
+      return responseJson(
         {
           error: `AI could not produce a weather-compatible complete look for ${weatherLabel}. Missing category data: ${missingWeatherCompatibleSingleCategories.join(", ")}.`,
+        },
+        { status: 422 }
+      );
+    }
+    const missingWetSafeSingleCategories = missingWetSafeCategoriesFromWardrobe(
+      compactWardrobe,
+      canonicalIntent,
+      {
+        weatherContext: weatherContextSummary || null,
+        weatherProfile: canonicalWeatherProfile,
+      },
+      ["outerwear", "footwear"]
+    );
+    if (missingWetSafeSingleCategories.length > 0) {
+      return responseJson(
+        {
+          error: `AI could not produce a rain-ready complete look for current wet conditions. Missing rain-safe category data: ${missingWetSafeSingleCategories.join(", ")}.`,
         },
         { status: 422 }
       );
@@ -3463,10 +4731,33 @@ export async function POST(request: Request) {
     try {
       recentSingleHistory = await getRecentSingleLookHistory(ownerRateLimitKey);
     } catch (error) {
-      console.warn("[ai-look][single][history][read-failed]", error);
+      logWarn("[ai-look][single][history][read-failed]", {
+        error: toErrorDetails(error),
+      });
     }
     const recentSignatureSet = recentSignatureSetFromHistory(recentSingleHistory);
     const recentUsedIds = recentUsedIdSetFromHistory(recentSingleHistory);
+    let singleFeedbackSignals: SingleFeedbackSignals | null = null;
+    try {
+      singleFeedbackSignals = await getRecentSingleFeedbackSignals({
+        ownerKey: ownerRateLimitKey,
+        weatherProfile: canonicalWeatherProfile,
+        derivedProfile,
+      });
+      logInfo("[ai-look][single][feedback-signals][loaded]", {
+        penalizedSignatures: singleFeedbackSignals.penalizedSignatures.size,
+        penalizedGarmentIds: singleFeedbackSignals.penalizedGarmentIds.size,
+        rainMismatchSignal: singleFeedbackSignals.rainMismatchSignal,
+        materialMismatchSignal: singleFeedbackSignals.materialMismatchSignal,
+        formalityMismatchSignal: singleFeedbackSignals.formalityMismatchSignal,
+        styleMismatchSignal: singleFeedbackSignals.styleMismatchSignal,
+        timeMismatchSignal: singleFeedbackSignals.timeMismatchSignal,
+      });
+    } catch (error) {
+      logWarn("[ai-look][single][feedback-signals][read-failed]", {
+        error: toErrorDetails(error),
+      });
+    }
 
     const collectedCandidates: SingleLookCandidate[] = [];
     const seenSignatures = new Set<string>();
@@ -3487,6 +4778,8 @@ export async function POST(request: Request) {
           prompt: [
             `User request:\n${userPrompt}`,
             `Canonical interpreted intent:\n${JSON.stringify(canonicalIntent)}`,
+            `Structured weather profile (deterministic):\n${JSON.stringify(canonicalWeatherProfile)}`,
+            `Derived profile (deterministic):\n${JSON.stringify(derivedProfile)}`,
             weatherContextSummary || "No external weather context available.",
             `Return up to ${remaining} distinct candidates in this round.`,
             recentSignatureSet.size > 0
@@ -3511,12 +4804,12 @@ export async function POST(request: Request) {
           ].join("\n\n"),
         });
 
-        console.info(
+        logInfo(
           "[ai-look][single][step-2][candidates-generated]",
-          JSON.stringify({
+          {
             attempt: attempt + 1,
             rawCandidates: object.candidates.length,
-          })
+          }
         );
 
         for (const candidate of object.candidates) {
@@ -3526,6 +4819,8 @@ export async function POST(request: Request) {
             ids: candidate.selectedGarmentIds,
             intent: canonicalIntent,
             weatherContext: weatherContextSummary || null,
+            weatherProfile: canonicalWeatherProfile,
+            derivedProfile,
             recentUsedIds,
             anchorGarmentId: effectiveAnchorGarmentId,
             anchorMode: effectiveAnchorMode,
@@ -3535,9 +4830,9 @@ export async function POST(request: Request) {
           });
 
           if (!validated) {
-            console.info(
+            logInfo(
               "[ai-look][single][step-2][candidate-dropped]",
-              JSON.stringify({ reason: "failed-validation-or-normalization" })
+              { reason: "failed-validation-or-normalization" }
             );
             continue;
           }
@@ -3546,16 +4841,16 @@ export async function POST(request: Request) {
             effectiveAnchorGarmentId != null &&
             !validated.selectedGarmentIds.includes(effectiveAnchorGarmentId)
           ) {
-            console.info(
+            logInfo(
               "[ai-look][single][anchor][candidate-dropped]",
-              JSON.stringify({ reason: "missing-anchor-after-normalization" })
+              { reason: "missing-anchor-after-normalization" }
             );
             continue;
           }
           if (seenSignatures.has(validated.signature)) {
-            console.info(
+            logInfo(
               "[ai-look][single][step-2][candidate-dropped]",
-              JSON.stringify({ reason: "duplicate-signature", signature: validated.signature })
+              { reason: "duplicate-signature", signature: validated.signature }
             );
             continue;
           }
@@ -3565,32 +4860,42 @@ export async function POST(request: Request) {
           if (collectedCandidates.length >= SINGLE_LOOK_TARGET_CANDIDATES) break;
         }
       } catch (error) {
-        console.warn(
+        logWarn(
           "[ai-look][single][step-2][candidate-generation-failed]",
-          JSON.stringify({ attempt: attempt + 1 })
+          { attempt: attempt + 1 }
         );
-        console.warn(error);
+        logWarn("[ai-look][single][step-2][candidate-generation-error]", {
+          attempt: attempt + 1,
+          error: toErrorDetails(error),
+        });
       }
     }
 
-    console.info(
+    logInfo(
       "[ai-look][single][step-2][candidate-final-count]",
-      JSON.stringify({
+      {
         attemptedTarget: SINGLE_LOOK_TARGET_CANDIDATES,
         finalValidCandidates: collectedCandidates.length,
         nonRepeatedCandidates: collectedCandidates.filter((candidate) => !recentSignatureSet.has(candidate.signature)).length,
-      })
+      }
     );
 
     let selectedLook = chooseTopSingleLookCandidate({
       candidates: collectedCandidates,
       history: recentSingleHistory,
+      intent: canonicalIntent,
+      weatherContext: weatherContextSummary || null,
+      weatherProfile: canonicalWeatherProfile,
+      derivedProfile,
+      feedbackSignals: singleFeedbackSignals,
     });
 
     if (!selectedLook) {
       selectedLook = buildDeterministicSingleLookFallbackCandidate({
         intent: canonicalIntent,
         weatherContext: weatherContextSummary || null,
+        weatherProfile: canonicalWeatherProfile,
+        derivedProfile,
         recentUsedIds,
         avoidSignatures: recentSignatureSet,
         anchorGarmentId: effectiveAnchorGarmentId,
@@ -3600,20 +4905,20 @@ export async function POST(request: Request) {
         garmentCategoryById,
       });
       if (selectedLook) {
-        console.info(
+        logInfo(
           "[ai-look][single][step-2][fallback-used]",
-          JSON.stringify({
+          {
             signature: selectedLook.signature,
             includedAnchor:
               effectiveAnchorGarmentId != null &&
               selectedLook.selectedGarmentIds.includes(effectiveAnchorGarmentId),
-          })
+          }
         );
       }
     }
 
     if (!selectedLook) {
-      return NextResponse.json(
+      return responseJson(
         { error: "AI could not produce a complete look. Please refine your prompt." },
         { status: 422 }
       );
@@ -3623,15 +4928,15 @@ export async function POST(request: Request) {
       effectiveAnchorGarmentId != null &&
       !selectedLook.selectedGarmentIds.includes(effectiveAnchorGarmentId)
     ) {
-      return NextResponse.json(
+      return responseJson(
         { error: "Could not produce a complete anchored look with current wardrobe constraints." },
         { status: 422 }
       );
     }
 
-    console.info(
+    logInfo(
       "[ai-look][single][step-2][selected]",
-      JSON.stringify({
+      {
         signature: selectedLook.signature,
         confidence: selectedLook.confidence,
         repeatedFromHistory: recentSignatureSet.has(selectedLook.signature),
@@ -3641,8 +4946,22 @@ export async function POST(request: Request) {
         rerankScore: computeSingleLookRerankScore({
           candidate: selectedLook,
           history: recentSingleHistory,
+          intent: canonicalIntent,
+          weatherContext: weatherContextSummary || null,
+          weatherProfile: canonicalWeatherProfile,
+          derivedProfile,
+          feedbackSignals: singleFeedbackSignals,
         }),
-      })
+        weatherProfile: canonicalWeatherProfile,
+        derivedProfile,
+        ruleTrace: buildLineupRuleTrace({
+          lineup: selectedLook.lineupGarments,
+          intent: canonicalIntent,
+          weatherContext: weatherContextSummary || null,
+          weatherProfile: canonicalWeatherProfile,
+          derivedProfile,
+        }),
+      }
     );
 
     try {
@@ -3651,13 +4970,44 @@ export async function POST(request: Request) {
         ids: selectedLook.selectedGarmentIds,
       });
     } catch (error) {
-      console.warn("[ai-look][single][history][write-failed]", error);
+      logWarn("[ai-look][single][history][write-failed]", {
+        error: toErrorDetails(error),
+      });
     }
 
-    return NextResponse.json({
+    const singleRequestFingerprint = buildSingleRequestFingerprint({
+      weather: canonicalContext.weather,
+      occasion: canonicalContext.occasion,
+      place: canonicalContext.place,
+      timeOfDay: canonicalContext.timeOfDay,
+      locationHint,
+    });
+
+    logInfo(
+      "[ai-look][single][final-output]",
+      {
+        requestFingerprint: singleRequestFingerprint,
+        lookName: selectedLook.lookName,
+        lineupSignature: selectedLook.signature,
+        garments: selectedLook.lineupGarments,
+        rationale: selectedLook.rationale,
+        confidence: selectedLook.confidence,
+        modelConfidence: selectedLook.modelConfidence,
+        matchScore: selectedLook.matchScore,
+        interpretedIntent: canonicalIntent,
+        weatherProfile: canonicalWeatherProfile,
+        derivedProfile,
+        weatherContext: weatherContextSummary || null,
+        weatherContextStatus: weatherStatus,
+      }
+    );
+
+    return responseJson({
       mode: "single",
+      requestFingerprint: singleRequestFingerprint,
       primaryLook: {
         lookName: selectedLook.lookName,
+        lineupSignature: selectedLook.signature,
         lineup: selectedLook.lineupGarments.map((garment) => ({
           id: garment.id,
           model: garment.model,
@@ -3671,11 +5021,15 @@ export async function POST(request: Request) {
         matchScore: selectedLook.matchScore,
       },
       interpretedIntent: canonicalIntent,
+      weatherProfile: canonicalWeatherProfile,
+      derivedProfile,
       weatherContext: weatherContextSummary || null,
       weatherContextStatus: weatherStatus,
     });
   } catch (error) {
-    console.error("Failed to generate AI look:", error);
-    return NextResponse.json({ error: "Failed to generate look." }, { status: 500 });
+    logError("[ai-look][request][failed]", {
+      error: toErrorDetails(error),
+    });
+    return responseJson({ error: "Failed to generate look." }, { status: 500 });
   }
 }

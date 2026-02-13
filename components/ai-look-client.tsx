@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface LookGarment {
   id: number;
@@ -20,8 +21,28 @@ interface LookGarment {
   file_name: string;
 }
 
+interface WeatherProfile {
+  tempBand: "cold" | "cool" | "mild" | "warm" | "hot";
+  precipitationLevel: "none" | "light" | "moderate" | "heavy";
+  precipitationType: "none" | "rain" | "snow" | "mixed";
+  windBand: "calm" | "breezy" | "windy";
+  humidityBand: "dry" | "normal" | "humid";
+  wetSurfaceRisk: "low" | "medium" | "high";
+  confidence: "high" | "medium" | "low";
+}
+
+interface DerivedProfile {
+  formality: string | null;
+  style: string[];
+  materialTargets: {
+    prefer: string[];
+    avoid: string[];
+  };
+}
+
 interface SingleLookResult {
   lookName: string;
+  lineupSignature: string;
   lineup: LookGarment[];
   rationale: string;
   confidence: number;
@@ -31,7 +52,10 @@ interface SingleLookResult {
 
 interface SingleLookResponse {
   mode: "single";
+  requestFingerprint: string;
   primaryLook: SingleLookResult;
+  weatherProfile?: WeatherProfile;
+  derivedProfile?: DerivedProfile;
   interpretedIntent?: {
     weather: string[];
     occasion: string[];
@@ -48,6 +72,7 @@ interface SingleLookResponse {
 interface TravelDayResult {
   date: string;
   lookName: string;
+  lineupSignature: string;
   lineup: LookGarment[];
   rationale: string;
   confidence: number;
@@ -55,6 +80,8 @@ interface TravelDayResult {
   matchScore: number;
   weatherContext: string;
   weatherStatus: "forecast" | "seasonal" | "failed";
+  weatherProfile?: WeatherProfile;
+  derivedProfile?: DerivedProfile;
   reusedGarmentIds: number[];
   interpretedIntent?: {
     weather: string[];
@@ -76,6 +103,7 @@ interface TravelSkippedDay {
 
 interface TravelPlanResponse {
   mode: "travel";
+  requestFingerprint: string;
   destination: string;
   reason: "Vacation" | "Office" | "Customer visit";
   startDate: string;
@@ -91,12 +119,15 @@ interface TravelPlanResponse {
 
 type AiMode = "single" | "travel";
 type AnchorMode = "strict" | "soft";
+type FeedbackVote = "up" | "down";
+type FeedbackStatus = "idle" | "submitting" | "submitted" | "error";
 
 const isValidSingleLookResult = (value: unknown): value is SingleLookResult => {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   return (
     typeof record.lookName === "string" &&
+    typeof record.lineupSignature === "string" &&
     Array.isArray(record.lineup) &&
     typeof record.rationale === "string" &&
     typeof record.confidence === "number" &&
@@ -112,7 +143,16 @@ const parseSingleLookResponse = (value: unknown): SingleLookResponse | null => {
 
   return {
     mode: "single",
+    requestFingerprint: typeof record.requestFingerprint === "string" ? record.requestFingerprint : "",
     primaryLook: record.primaryLook,
+    weatherProfile:
+      record.weatherProfile && typeof record.weatherProfile === "object"
+        ? (record.weatherProfile as WeatherProfile)
+        : undefined,
+    derivedProfile:
+      record.derivedProfile && typeof record.derivedProfile === "object"
+        ? (record.derivedProfile as DerivedProfile)
+        : undefined,
     interpretedIntent:
       record.interpretedIntent && typeof record.interpretedIntent === "object"
         ? (record.interpretedIntent as SingleLookResponse["interpretedIntent"])
@@ -149,6 +189,12 @@ export default function AiLookClient() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMode, setLoadingMode] = useState<AiMode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [singleFeedbackVote, setSingleFeedbackVote] = useState<FeedbackVote | null>(null);
+  const [singleFeedbackReason, setSingleFeedbackReason] = useState("");
+  const [singleFeedbackStatus, setSingleFeedbackStatus] = useState<FeedbackStatus>("idle");
+  const [travelFeedbackVotes, setTravelFeedbackVotes] = useState<Record<string, FeedbackVote | null>>({});
+  const [travelFeedbackReasons, setTravelFeedbackReasons] = useState<Record<string, string>>({});
+  const [travelFeedbackStatuses, setTravelFeedbackStatuses] = useState<Record<string, FeedbackStatus>>({});
 
   const travelDateError = useMemo(() => {
     if (!startDate || !endDate) return null;
@@ -223,6 +269,170 @@ export default function AiLookClient() {
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
   };
 
+  const submitFeedback = async ({
+    mode,
+    requestFingerprint,
+    lineupSignature,
+    garmentIds,
+    vote,
+    reasonText,
+    weatherProfile,
+    derivedProfile,
+  }: {
+    mode: "single" | "travel";
+    requestFingerprint: string;
+    lineupSignature: string;
+    garmentIds: number[];
+    vote: FeedbackVote;
+    reasonText?: string;
+    weatherProfile?: WeatherProfile;
+    derivedProfile?: DerivedProfile;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const response = await fetch("/api/ai-look/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          requestFingerprint,
+          lineupSignature,
+          garmentIds,
+          vote,
+          reasonText: reasonText?.trim() || undefined,
+          weatherProfile,
+          derivedProfile,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { ok: false, error: data?.error || "Failed to save feedback." };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Network error while submitting feedback." };
+    }
+  };
+
+  const handleSingleFeedbackVote = async (vote: FeedbackVote) => {
+    if (!singleResult?.primaryLook) return;
+    if (singleFeedbackStatus === "submitted") return;
+    setSingleFeedbackVote(vote);
+
+    if (vote === "down") {
+      setSingleFeedbackStatus("idle");
+      return;
+    }
+
+    setSingleFeedbackStatus("submitting");
+    const feedback = await submitFeedback({
+      mode: "single",
+      requestFingerprint: singleResult.requestFingerprint,
+      lineupSignature: singleResult.primaryLook.lineupSignature,
+      garmentIds: singleResult.primaryLook.lineup.map((garment) => garment.id),
+      vote,
+      weatherProfile: singleResult.weatherProfile,
+      derivedProfile: singleResult.derivedProfile,
+    });
+    if (feedback.ok) {
+      setSingleFeedbackStatus("submitted");
+      toast.success("Thanks — feedback saved.");
+      return;
+    }
+    setSingleFeedbackStatus("error");
+    toast.error(feedback.error || "Failed to save feedback.");
+  };
+
+  const handleSubmitSingleDownvote = async () => {
+    if (!singleResult?.primaryLook) return;
+    if (singleFeedbackStatus === "submitted") return;
+    const reasonText = singleFeedbackReason.trim();
+    if (!reasonText) {
+      setSingleFeedbackStatus("error");
+      toast.error("Please add what went wrong.");
+      return;
+    }
+
+    setSingleFeedbackStatus("submitting");
+    const feedback = await submitFeedback({
+      mode: "single",
+      requestFingerprint: singleResult.requestFingerprint,
+      lineupSignature: singleResult.primaryLook.lineupSignature,
+      garmentIds: singleResult.primaryLook.lineup.map((garment) => garment.id),
+      vote: "down",
+      reasonText,
+      weatherProfile: singleResult.weatherProfile,
+      derivedProfile: singleResult.derivedProfile,
+    });
+    if (feedback.ok) {
+      setSingleFeedbackStatus("submitted");
+      toast.success("Thanks — feedback saved.");
+      return;
+    }
+    setSingleFeedbackStatus("error");
+    toast.error(feedback.error || "Failed to save feedback.");
+  };
+
+  const handleTravelFeedbackVote = async (day: TravelDayResult, vote: FeedbackVote) => {
+    if (!travelResult) return;
+    const key = `${day.date}:${day.lineupSignature}`;
+    if (travelFeedbackStatuses[key] === "submitted") return;
+    setTravelFeedbackVotes((current) => ({ ...current, [key]: vote }));
+
+    if (vote === "down") {
+      setTravelFeedbackStatuses((current) => ({ ...current, [key]: "idle" }));
+      return;
+    }
+
+    setTravelFeedbackStatuses((current) => ({ ...current, [key]: "submitting" }));
+    const feedback = await submitFeedback({
+      mode: "travel",
+      requestFingerprint: travelResult.requestFingerprint,
+      lineupSignature: day.lineupSignature,
+      garmentIds: day.lineup.map((garment) => garment.id),
+      vote,
+      weatherProfile: day.weatherProfile,
+      derivedProfile: day.derivedProfile,
+    });
+    if (feedback.ok) {
+      setTravelFeedbackStatuses((current) => ({ ...current, [key]: "submitted" }));
+      toast.success("Thanks — feedback saved.");
+      return;
+    }
+    setTravelFeedbackStatuses((current) => ({ ...current, [key]: "error" }));
+    toast.error(feedback.error || "Failed to save feedback.");
+  };
+
+  const handleSubmitTravelDownvote = async (day: TravelDayResult) => {
+    if (!travelResult) return;
+    const key = `${day.date}:${day.lineupSignature}`;
+    if (travelFeedbackStatuses[key] === "submitted") return;
+    const reasonText = (travelFeedbackReasons[key] || "").trim();
+    if (!reasonText) {
+      setTravelFeedbackStatuses((current) => ({ ...current, [key]: "error" }));
+      toast.error("Please add what went wrong.");
+      return;
+    }
+
+    setTravelFeedbackStatuses((current) => ({ ...current, [key]: "submitting" }));
+    const feedback = await submitFeedback({
+      mode: "travel",
+      requestFingerprint: travelResult.requestFingerprint,
+      lineupSignature: day.lineupSignature,
+      garmentIds: day.lineup.map((garment) => garment.id),
+      vote: "down",
+      reasonText,
+      weatherProfile: day.weatherProfile,
+      derivedProfile: day.derivedProfile,
+    });
+    if (feedback.ok) {
+      setTravelFeedbackStatuses((current) => ({ ...current, [key]: "submitted" }));
+      toast.success("Thanks — feedback saved.");
+      return;
+    }
+    setTravelFeedbackStatuses((current) => ({ ...current, [key]: "error" }));
+    toast.error(feedback.error || "Failed to save feedback.");
+  };
+
   const handleGenerateSingle = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmedPrompt = prompt.trim();
@@ -236,6 +446,9 @@ export default function AiLookClient() {
     setError(null);
     setSingleResult(null);
     setTravelResult(null);
+    setSingleFeedbackVote(null);
+    setSingleFeedbackReason("");
+    setSingleFeedbackStatus("idle");
 
     try {
       const payload: {
@@ -299,6 +512,9 @@ export default function AiLookClient() {
     setError(null);
     setTravelResult(null);
     setSingleResult(null);
+    setTravelFeedbackVotes({});
+    setTravelFeedbackReasons({});
+    setTravelFeedbackStatuses({});
 
     try {
       const response = await fetch("/api/ai-look", {
@@ -335,6 +551,9 @@ export default function AiLookClient() {
     setPrompt("");
     setError(null);
     setSingleResult(null);
+    setSingleFeedbackVote(null);
+    setSingleFeedbackReason("");
+    setSingleFeedbackStatus("idle");
   };
 
   const handleClearTravel = () => {
@@ -344,6 +563,9 @@ export default function AiLookClient() {
     setReason("Vacation");
     setError(null);
     setTravelResult(null);
+    setTravelFeedbackVotes({});
+    setTravelFeedbackReasons({});
+    setTravelFeedbackStatuses({});
   };
 
   return (
@@ -477,7 +699,7 @@ export default function AiLookClient() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-5">
-              <div className="w-full rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+              <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
                 <Skeleton className="h-5 w-56" />
               </div>
 
@@ -511,6 +733,16 @@ export default function AiLookClient() {
                   <Skeleton className="h-4 w-11/12" />
                   <Skeleton className="h-4 w-10/12" />
                   <Skeleton className="h-4 w-9/12" />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-3">
+                  <Skeleton className="h-4 w-52" />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Skeleton className="h-9 w-28" />
+                  <Skeleton className="h-9 w-28" />
                 </div>
               </div>
             </CardContent>
@@ -590,6 +822,61 @@ export default function AiLookClient() {
                 <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">Rationale</h3>
                 <p className="text-sm leading-6 text-slate-800">{primaryLook.rationale}</p>
               </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="mb-2 text-sm font-medium text-slate-800">Was this recommendation useful?</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={singleFeedbackVote === "up"}
+                    className={cn(
+                      "bg-transparent",
+                      singleFeedbackVote === "up" && "border-slate-600 text-slate-900 ring-1 ring-slate-300"
+                    )}
+                    disabled={singleFeedbackStatus === "submitting" || singleFeedbackStatus === "submitted"}
+                    onClick={() => void handleSingleFeedbackVote("up")}
+                  >
+                    {singleFeedbackVote === "up" ? "✓ Thumbs up" : "👍 Thumbs up"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={singleFeedbackVote === "down"}
+                    className={cn(
+                      "bg-transparent",
+                      singleFeedbackVote === "down" && "border-slate-600 text-slate-900 ring-1 ring-slate-300"
+                    )}
+                    disabled={singleFeedbackStatus === "submitting" || singleFeedbackStatus === "submitted"}
+                    onClick={() => void handleSingleFeedbackVote("down")}
+                  >
+                    {singleFeedbackVote === "down" ? "✓ Thumbs down" : "👎 Thumbs down"}
+                  </Button>
+                </div>
+                {singleFeedbackVote === "down" && (
+                  <div className="mt-3">
+                    <Textarea
+                      value={singleFeedbackReason}
+                      onChange={(event) => setSingleFeedbackReason(event.target.value)}
+                      placeholder="Example: Context (light rain, 6°C, city, all day) | Issue (tweed overcoat not rain-ready) | Change (use water-resistant/technical outerwear) | Keep (boots + elevated-casual style)."
+                      className="min-h-20 bg-white"
+                      disabled={singleFeedbackStatus === "submitted"}
+                    />
+                    <div className="mt-4 flex justify-end">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={singleFeedbackStatus === "submitting" || singleFeedbackStatus === "submitted"}
+                        onClick={() => void handleSubmitSingleDownvote()}
+                      >
+                        {singleFeedbackStatus === "submitting" ? "Sending..." : "Send feedback"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
         )}
@@ -605,7 +892,7 @@ export default function AiLookClient() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
                 <Skeleton className="h-5 w-36" />
               </div>
 
@@ -643,6 +930,16 @@ export default function AiLookClient() {
                       <Skeleton className="h-4 w-11/12" />
                       <Skeleton className="h-4 w-10/12" />
                       <Skeleton className="h-4 w-9/12" />
+                    </div>
+
+                    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <div className="mb-3">
+                        <Skeleton className="h-4 w-44" />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Skeleton className="h-9 w-28" />
+                        <Skeleton className="h-9 w-28" />
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -714,6 +1011,81 @@ export default function AiLookClient() {
                     </div>
 
                     <p className="mt-3 text-sm text-slate-800">{day.rationale}</p>
+
+                    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <p className="mb-2 text-sm font-medium text-slate-800">Was this day look useful?</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          aria-pressed={travelFeedbackVotes[`${day.date}:${day.lineupSignature}`] === "up"}
+                          className={cn(
+                            "bg-transparent",
+                            travelFeedbackVotes[`${day.date}:${day.lineupSignature}`] === "up" &&
+                              "border-slate-600 text-slate-900 ring-1 ring-slate-300"
+                          )}
+                          disabled={
+                            travelFeedbackStatuses[`${day.date}:${day.lineupSignature}`] === "submitting" ||
+                            travelFeedbackStatuses[`${day.date}:${day.lineupSignature}`] === "submitted"
+                          }
+                          onClick={() => void handleTravelFeedbackVote(day, "up")}
+                        >
+                          {travelFeedbackVotes[`${day.date}:${day.lineupSignature}`] === "up" ? "✓ Thumbs up" : "👍 Thumbs up"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          aria-pressed={travelFeedbackVotes[`${day.date}:${day.lineupSignature}`] === "down"}
+                          className={cn(
+                            "bg-transparent",
+                            travelFeedbackVotes[`${day.date}:${day.lineupSignature}`] === "down" &&
+                              "border-slate-600 text-slate-900 ring-1 ring-slate-300"
+                          )}
+                          disabled={
+                            travelFeedbackStatuses[`${day.date}:${day.lineupSignature}`] === "submitting" ||
+                            travelFeedbackStatuses[`${day.date}:${day.lineupSignature}`] === "submitted"
+                          }
+                          onClick={() => void handleTravelFeedbackVote(day, "down")}
+                        >
+                          {travelFeedbackVotes[`${day.date}:${day.lineupSignature}`] === "down"
+                            ? "✓ Thumbs down"
+                            : "👎 Thumbs down"}
+                        </Button>
+                      </div>
+                      {travelFeedbackVotes[`${day.date}:${day.lineupSignature}`] === "down" && (
+                        <div className="mt-3">
+                          <Textarea
+                            value={travelFeedbackReasons[`${day.date}:${day.lineupSignature}`] || ""}
+                            onChange={(event) =>
+                              setTravelFeedbackReasons((current) => ({
+                                ...current,
+                                [`${day.date}:${day.lineupSignature}`]: event.target.value,
+                              }))
+                            }
+                            placeholder="Example: Context (light rain, 6°C, city, all day) | Issue (outerwear not rain-ready) | Change (use water-resistant/technical outerwear) | Keep (boots + silhouette)."
+                            className="min-h-20 bg-white"
+                            disabled={travelFeedbackStatuses[`${day.date}:${day.lineupSignature}`] === "submitted"}
+                          />
+                          <div className="mt-4 flex justify-end">
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={
+                                travelFeedbackStatuses[`${day.date}:${day.lineupSignature}`] === "submitting" ||
+                                travelFeedbackStatuses[`${day.date}:${day.lineupSignature}`] === "submitted"
+                              }
+                              onClick={() => void handleSubmitTravelDownvote(day)}
+                            >
+                              {travelFeedbackStatuses[`${day.date}:${day.lineupSignature}`] === "submitting"
+                                ? "Sending..."
+                                : "Send feedback"}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
