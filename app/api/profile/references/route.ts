@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { getOwnerKey, isOwnerSession } from "@/lib/owner";
 import {
+  deactivateUserProfileReferenceByKey,
   getUserProfileActiveReferences,
   getUserProfileReferenceToolOptions,
   upsertUserProfileReference,
@@ -24,6 +25,10 @@ const referenceUpsertSchema = z.object({
 
 const upsertReferenceRequestSchema = z.object({
   reference: referenceUpsertSchema,
+}).strict();
+
+const deleteReferenceRequestSchema = z.object({
+  key: z.string().trim().min(1).max(120),
 }).strict();
 
 export async function GET() {
@@ -83,5 +88,42 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Failed to upsert profile reference:", error);
     return NextResponse.json({ error: "Failed to update profile reference" }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    if (!(await isOwnerSession())) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const rawBody = await request.json();
+    const parsed = deleteReferenceRequestSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid delete payload" }, { status: 400 });
+    }
+
+    const ownerKey = getOwnerKey();
+    const deleted = await deactivateUserProfileReferenceByKey({
+      ownerKey,
+      key: parsed.data.key,
+    });
+    if (!deleted) {
+      return NextResponse.json({ error: "Reference not found" }, { status: 404 });
+    }
+
+    const [references, toolOptions] = await Promise.all([
+      getUserProfileActiveReferences(ownerKey),
+      getUserProfileReferenceToolOptions(ownerKey),
+    ]);
+
+    return NextResponse.json({
+      ok: true,
+      references,
+      toolOptions,
+    });
+  } catch (error) {
+    console.error("Failed to delete profile reference:", error);
+    return NextResponse.json({ error: "Failed to delete profile reference" }, { status: 500 });
   }
 }

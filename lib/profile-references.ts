@@ -343,3 +343,27 @@ export const getActiveReferenceDirectiveCatalog = async (
     };
   });
 };
+
+export const deactivateUserProfileReferenceByKey = async ({
+  ownerKey,
+  key,
+}: {
+  ownerKey: string;
+  key: string;
+}): Promise<boolean> => {
+  const normalizedKey = normalizeReferenceKey(key);
+  if (!normalizedKey) return false;
+
+  const rows = await sql`
+    UPDATE user_profile_reference
+    SET
+      is_active = FALSE,
+      updated_at = NOW()
+    WHERE owner_key = ${ownerKey}
+      AND key = ${normalizedKey}
+      AND is_active = TRUE
+    RETURNING id;
+  ` as Array<{ id: number }>;
+
+  return rows.length > 0;
+};

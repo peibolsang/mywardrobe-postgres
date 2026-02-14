@@ -116,7 +116,7 @@ Use imperative commit subjects.
   - `app/middleware.ts` applies auth gate on `/garments/*` (session required) and owner gate on `/editor/*` + `/ai-look/*` + `/profile/*` for defense-in-depth.
 - API-level protection:
   - `/api/wardrobe`, `/api/editor-options`, `/api/upload`, and `/api/ai-look` require authenticated owner session (`403` on failure).
-  - `/api/profile`, `/api/profile/styles`, `/api/profile/references`, `/api/profile/references/load`, and `/api/profile/references/catalog` require authenticated owner session (`403` on failure).
+  - `/api/profile`, `/api/profile/styles`, `/api/profile/references` (`GET`/`POST`/`DELETE`), `/api/profile/references/load`, and `/api/profile/references/catalog` require authenticated owner session (`403` on failure).
   - `/api/ai-look/feedback` also requires authenticated owner session (`403` on failure).
 - Mutation-level protection:
   - `createGarment`, `updateGarment`, and `deleteGarment` enforce owner checks server-side regardless of UI access.
