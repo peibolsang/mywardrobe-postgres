@@ -68,6 +68,7 @@ Use imperative commit subjects.
 4. Editor pages (`/editor`, `/add-garment`) preload wardrobe/schema/editor-options server-side and render `EditorForm` inside `Suspense` with a layout-matching skeleton fallback to avoid empty-state flash and layout shift.
 5. Profile page (`/profile`) is route-guarded server-side (owner-only), hydrates owner profile defaults, and persists updates via `/api/profile`.
 6. AI look page (`/ai-look`) is route-guarded server-side and renders a client UI with two tabs: (a) free-text single-look generation and (b) "Pack for Travel" planning.
+   - Single-look prompt includes an `Add Tool` control that lets the user attach explicit `Style` and `Reference` selections as removable chips per request.
 7. `/api/ai-look` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
 8. Single-look mode uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) multi-candidate look generation constrained to wardrobe IDs, followed by server-side validation, normalization, reranking, and one final look selection.
    - Step 1 is context-first (`weather`, `occasion`, `place`, `timeOfDay`, `notes`); server deterministically derives `formality`, `style`, and material targets from context + structured weather profile before Step 2.
@@ -79,6 +80,8 @@ Use imperative commit subjects.
 ## AI Look Agent (Mode Summary)
 1. Single-look interpretation: `/api/ai-look` maps free-text input into canonical wardrobe intent (`weather`, `occasion`, `place`, `timeOfDay`, `formality`, `style`) via structured output; the model can tool-call `getWeatherByLocation` for live weather context.
    - Single-look weather location resolution priority is `prompt location > profile default location > no-location fallback`; prompt date parsing is intentionally not used in single-look mode.
+   - Single-look request payload now optionally accepts `selectedTools` (`[{ type: "style" | "reference", id: string }]`) from the AI Look `Add Tool` UI.
+   - Directive merge precedence is deterministic: hard safety/context constraints first, then tool-selected directives, then free-text directives, then derived-profile fallback.
 2. Single-look recommendation: Step 2 attempts up to six candidates and degrades gracefully when fewer valid candidates are returned. Candidates are wardrobe-ID-only, validated against DB IDs, normalized to exactly four pieces (`outerwear + top + bottom + footwear`), deduplicated by signature, and reranked with objective fit + model confidence + recency/overlap controls.
    - Single mode computes a structured deterministic weather profile (`tempBand`, `precipitation`, `wind`, `humidity`, `wetSurfaceRisk`, `confidence`) and a deterministic derived profile (`formality`, `style`, material targets).
    - Category-aware deterministic hard rules enforce weather and occasion/place compatibility per garment; wet-surface/material conflicts (especially outerwear/footwear) are hard-blocked.

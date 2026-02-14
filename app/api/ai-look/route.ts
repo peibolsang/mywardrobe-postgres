@@ -14,10 +14,16 @@ import type { Garment } from "@/lib/types";
 import { getUserProfileByOwnerKey } from "@/lib/user-profile";
 import schema from "@/public/schema.json";
 
+const singleSelectedToolSchema = z.object({
+  type: z.enum(["style", "reference", "icon"]),
+  id: z.string().trim().min(1).max(80),
+}).strict();
+
 const singleLookRequestSchema = z.object({
   prompt: z.string().trim().min(1, "Prompt is required."),
   anchorGarmentId: z.coerce.number().int().positive().optional(),
   anchorMode: z.enum(["strict", "soft"]).optional(),
+  selectedTools: z.array(singleSelectedToolSchema).max(8).optional(),
 });
 
 const travelRequestSchema = z.object({
@@ -118,6 +124,25 @@ interface DerivedProfile {
 }
 
 type DirectiveConfidence = "high" | "medium" | "low";
+type SelectedToolType = "style" | "reference";
+type SelectedToolInputType = SelectedToolType | "icon";
+
+interface SingleSelectedTool {
+  type: SelectedToolInputType;
+  id: string;
+}
+
+interface NormalizedSelectedTool {
+  type: SelectedToolType;
+  id: string;
+}
+
+interface AppliedSelectedTool {
+  type: SelectedToolType;
+  id: string;
+  applied: boolean;
+  resolvedKey: string | null;
+}
 
 interface UserStyleDirective {
   key: string;
@@ -132,8 +157,8 @@ interface UserStyleDirective {
   confidence: DirectiveConfidence;
 }
 
-interface UserIconDirective {
-  iconKey: string;
+interface UserReferenceDirective {
+  referenceKey: string;
   sourceTerms: string[];
   styleBiasTags: string[];
   silhouetteBiasTags: string[];
@@ -146,8 +171,9 @@ interface UserIconDirective {
 }
 
 interface UserIntentDirectives {
+  selectedTools: AppliedSelectedTool[];
   styleDirectives: UserStyleDirective[];
-  iconDirectives: UserIconDirective[];
+  referenceDirectives: UserReferenceDirective[];
   merged: {
     styleTagsPrefer: string[];
     silhouetteTagsPrefer: string[];
@@ -430,8 +456,8 @@ const STYLE_ALIAS_DICTIONARY: Array<{
   },
 ];
 
-const ICON_ALIAS_DICTIONARY: Array<{
-  iconKey: string;
+const REFERENCE_ALIAS_DICTIONARY: Array<{
+  referenceKey: string;
   terms: string[];
   styleTags: string[];
   silhouetteTags: string[];
@@ -440,7 +466,7 @@ const ICON_ALIAS_DICTIONARY: Array<{
   formalityBias?: string | null;
 }> = [
   {
-    iconKey: "albert_muzquiz",
+    referenceKey: "albert_muzquiz",
     terms: ["albert muzquiz", "muzquiz", "edgy albert"],
     styleTags: ["vintage", "western", "americana", "workwear"],
     silhouetteTags: ["high-waisted", "boxy", "straight-leg", "cropped"],
@@ -449,7 +475,7 @@ const ICON_ALIAS_DICTIONARY: Array<{
     formalityBias: "Elevated Casual",
   },
   {
-    iconKey: "alessandro_squarzi",
+    referenceKey: "alessandro_squarzi",
     terms: ["alessandro squarzi", "squarzi", "as65"],
     styleTags: ["workwear", "vintage", "classic", "western"],
     silhouetteTags: ["relaxed", "heritage", "rugged-tailoring"],
@@ -458,7 +484,7 @@ const ICON_ALIAS_DICTIONARY: Array<{
     formalityBias: "Elevated Casual",
   },
   {
-    iconKey: "derek_guy",
+    referenceKey: "derek_guy",
     terms: ["derek guy", "dieworkwear", "menswear guy"],
     styleTags: ["classic-menswear", "ivy", "tailoring", "soft-shoulder"],
     silhouetteTags: ["full-cut", "drape", "high-rise", "proportionate"],
@@ -467,7 +493,7 @@ const ICON_ALIAS_DICTIONARY: Array<{
     formalityBias: "Business Casual",
   },
   {
-    iconKey: "aaron_levine",
+    referenceKey: "aaron_levine",
     terms: ["aaron levine", "levine"],
     styleTags: ["elevated-slouch", "high-low", "textural", "grunge-luxe"],
     silhouetteTags: ["oversized", "fluid", "relaxed", "layered"],
@@ -476,7 +502,7 @@ const ICON_ALIAS_DICTIONARY: Array<{
     formalityBias: "Elevated Casual",
   },
   {
-    iconKey: "simon_crompton",
+    referenceKey: "simon_crompton",
     terms: ["simon crompton", "permanent style", "crompton"],
     styleTags: ["sartorial", "luxury-minimalist", "bespoke", "craft-focused"],
     silhouetteTags: ["tailored", "clean", "refined", "natural-shoulder"],
@@ -1634,72 +1660,198 @@ const toCanonicalFormalityDirective = (value?: string | null): string | null => 
   return findCanonicalOption(FORMALITY_OPTIONS, value);
 };
 
+const buildStyleDirectiveFromEntry = ({
+  entry,
+  sourceTerms,
+  confidence,
+}: {
+  entry: (typeof STYLE_ALIAS_DICTIONARY)[number];
+  sourceTerms: string[];
+  confidence: DirectiveConfidence;
+}): UserStyleDirective => ({
+  key: entry.key,
+  sourceTerms: dedupeLowercase(sourceTerms),
+  canonicalStyleTags: toCanonicalStyleDirectiveTags(entry.styleTags),
+  silhouetteBiasTags: dedupeLowercase(entry.silhouetteTags),
+  materialBias: {
+    prefer: dedupeLowercase(entry.materialPrefer),
+    avoid: dedupeLowercase(entry.materialAvoid),
+  },
+  formalityBias: toCanonicalFormalityDirective(entry.formalityBias),
+  confidence,
+});
+
+const buildReferenceDirectiveFromEntry = ({
+  entry,
+  sourceTerms,
+  confidence,
+}: {
+  entry: (typeof REFERENCE_ALIAS_DICTIONARY)[number];
+  sourceTerms: string[];
+  confidence: DirectiveConfidence;
+}): UserReferenceDirective => ({
+  referenceKey: entry.referenceKey,
+  sourceTerms: dedupeLowercase(sourceTerms),
+  styleBiasTags: toCanonicalStyleDirectiveTags(entry.styleTags),
+  silhouetteBiasTags: dedupeLowercase(entry.silhouetteTags),
+  materialBias: {
+    prefer: dedupeLowercase(entry.materialPrefer),
+    avoid: dedupeLowercase(entry.materialAvoid),
+  },
+  formalityBias: toCanonicalFormalityDirective(entry.formalityBias),
+  confidence,
+});
+
+const dedupeSelectedTools = (selectedTools: SingleSelectedTool[] | undefined): NormalizedSelectedTool[] => {
+  if (!selectedTools || selectedTools.length === 0) return [];
+  const seen = new Set<string>();
+  const deduped: NormalizedSelectedTool[] = [];
+
+  for (const tool of selectedTools) {
+    const normalizedType: SelectedToolType = tool.type === "style" ? "style" : "reference";
+    const normalizedId = normalize(tool.id);
+    if (!normalizedId) continue;
+    const key = `${normalizedType}:${normalizeDirectiveText(normalizedId)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push({ type: normalizedType, id: normalizedId });
+  }
+
+  return deduped;
+};
+
 const extractUserIntentDirectives = ({
   userPrompt,
+  selectedTools,
 }: {
   userPrompt: string;
+  selectedTools?: SingleSelectedTool[];
 }): UserIntentDirectives => {
-  const styleDirectives: UserStyleDirective[] = [];
+  const dedupedSelectedTools = dedupeSelectedTools(selectedTools);
+  const selectedToolDirectives: AppliedSelectedTool[] = [];
+  const styleToolDirectives: UserStyleDirective[] = [];
+  const referenceToolDirectives: UserReferenceDirective[] = [];
+
+  for (const selectedTool of dedupedSelectedTools) {
+    if (selectedTool.type === "style") {
+      const styleEntry = STYLE_ALIAS_DICTIONARY.find(
+        (entry) => normalizeDirectiveText(entry.key) === normalizeDirectiveText(selectedTool.id)
+      );
+      if (styleEntry) {
+        styleToolDirectives.push(
+          buildStyleDirectiveFromEntry({
+            entry: styleEntry,
+            sourceTerms: [`tool:style:${styleEntry.key}`],
+            confidence: "high",
+          })
+        );
+        selectedToolDirectives.push({
+          type: "style",
+          id: selectedTool.id,
+          applied: true,
+          resolvedKey: styleEntry.key,
+        });
+      } else {
+        selectedToolDirectives.push({
+          type: "style",
+          id: selectedTool.id,
+          applied: false,
+          resolvedKey: null,
+        });
+      }
+      continue;
+    }
+
+    const referenceEntry = REFERENCE_ALIAS_DICTIONARY.find(
+      (entry) => normalizeDirectiveText(entry.referenceKey) === normalizeDirectiveText(selectedTool.id)
+    );
+    if (referenceEntry) {
+      referenceToolDirectives.push(
+        buildReferenceDirectiveFromEntry({
+          entry: referenceEntry,
+          sourceTerms: [`tool:reference:${referenceEntry.referenceKey}`],
+          confidence: "high",
+        })
+      );
+      selectedToolDirectives.push({
+        type: "reference",
+        id: selectedTool.id,
+        applied: true,
+        resolvedKey: referenceEntry.referenceKey,
+      });
+    } else {
+      selectedToolDirectives.push({
+        type: "reference",
+        id: selectedTool.id,
+        applied: false,
+        resolvedKey: null,
+      });
+    }
+  }
+
+  const freeTextStyleDirectives: UserStyleDirective[] = [];
   for (const entry of STYLE_ALIAS_DICTIONARY) {
     const matchedTerms = entry.terms.filter((term) => directiveTextIncludesTerm(userPrompt, term));
     if (matchedTerms.length === 0) continue;
-    styleDirectives.push({
-      key: entry.key,
-      sourceTerms: dedupeLowercase(matchedTerms),
-      canonicalStyleTags: toCanonicalStyleDirectiveTags(entry.styleTags),
-      silhouetteBiasTags: dedupeLowercase(entry.silhouetteTags),
-      materialBias: {
-        prefer: dedupeLowercase(entry.materialPrefer),
-        avoid: dedupeLowercase(entry.materialAvoid),
-      },
-      formalityBias: toCanonicalFormalityDirective(entry.formalityBias),
-      confidence: matchedTerms.length > 1 ? "high" : "medium",
-    });
+    freeTextStyleDirectives.push(
+      buildStyleDirectiveFromEntry({
+        entry,
+        sourceTerms: matchedTerms,
+        confidence: matchedTerms.length > 1 ? "high" : "medium",
+      })
+    );
   }
 
-  const iconDirectives: UserIconDirective[] = [];
-  for (const entry of ICON_ALIAS_DICTIONARY) {
+  const freeTextReferenceDirectives: UserReferenceDirective[] = [];
+  for (const entry of REFERENCE_ALIAS_DICTIONARY) {
     const matchedTerms = entry.terms.filter((term) => directiveTextIncludesTerm(userPrompt, term));
     if (matchedTerms.length === 0) continue;
-    iconDirectives.push({
-      iconKey: entry.iconKey,
-      sourceTerms: dedupeLowercase(matchedTerms),
-      styleBiasTags: toCanonicalStyleDirectiveTags(entry.styleTags),
-      silhouetteBiasTags: dedupeLowercase(entry.silhouetteTags),
-      materialBias: {
-        prefer: dedupeLowercase(entry.materialPrefer),
-        avoid: dedupeLowercase(entry.materialAvoid),
-      },
-      formalityBias: toCanonicalFormalityDirective(entry.formalityBias),
-      confidence: matchedTerms.length > 1 ? "high" : "medium",
-    });
+    freeTextReferenceDirectives.push(
+      buildReferenceDirectiveFromEntry({
+        entry,
+        sourceTerms: matchedTerms,
+        confidence: matchedTerms.length > 1 ? "high" : "medium",
+      })
+    );
   }
+
+  const styleToolKeys = new Set(styleToolDirectives.map((directive) => directive.key.toLowerCase()));
+  const referenceToolKeys = new Set(referenceToolDirectives.map((directive) => directive.referenceKey.toLowerCase()));
+  const styleDirectives = [
+    ...styleToolDirectives,
+    ...freeTextStyleDirectives.filter((directive) => !styleToolKeys.has(directive.key.toLowerCase())),
+  ];
+  const referenceDirectives = [
+    ...referenceToolDirectives,
+    ...freeTextReferenceDirectives.filter((directive) => !referenceToolKeys.has(directive.referenceKey.toLowerCase())),
+  ];
 
   const styleTagsPrefer = dedupeLowercase([
     ...styleDirectives.flatMap((directive) => directive.canonicalStyleTags),
-    ...iconDirectives.flatMap((directive) => directive.styleBiasTags),
+    ...referenceDirectives.flatMap((directive) => directive.styleBiasTags),
   ]);
   const silhouetteTagsPrefer = dedupeLowercase([
     ...styleDirectives.flatMap((directive) => directive.silhouetteBiasTags),
-    ...iconDirectives.flatMap((directive) => directive.silhouetteBiasTags),
+    ...referenceDirectives.flatMap((directive) => directive.silhouetteBiasTags),
   ]);
   const materialPrefer = dedupeLowercase([
     ...styleDirectives.flatMap((directive) => directive.materialBias.prefer),
-    ...iconDirectives.flatMap((directive) => directive.materialBias.prefer),
+    ...referenceDirectives.flatMap((directive) => directive.materialBias.prefer),
   ]);
   const materialAvoid = dedupeLowercase([
     ...styleDirectives.flatMap((directive) => directive.materialBias.avoid),
-    ...iconDirectives.flatMap((directive) => directive.materialBias.avoid),
+    ...referenceDirectives.flatMap((directive) => directive.materialBias.avoid),
   ]);
   const formalityBias = toCanonicalFormalityDirective(
     styleDirectives.find((directive) => directive.formalityBias)?.formalityBias ??
-    iconDirectives.find((directive) => directive.formalityBias)?.formalityBias ??
+    referenceDirectives.find((directive) => directive.formalityBias)?.formalityBias ??
     null
   );
 
   return {
+    selectedTools: selectedToolDirectives,
     styleDirectives,
-    iconDirectives,
+    referenceDirectives,
     merged: {
       styleTagsPrefer,
       silhouetteTagsPrefer,
@@ -1750,7 +1902,7 @@ type StyleDirectiveFit = {
   totalGarments: number;
   matchedStyleTags: string[];
   requestedStyleTags: string[];
-  matchedIconKeys: string[];
+  matchedReferenceKeys: string[];
 };
 
 const computeStyleDirectiveFit = ({
@@ -1768,7 +1920,7 @@ const computeStyleDirectiveFit = ({
       totalGarments: lineup.length,
       matchedStyleTags: [],
       requestedStyleTags,
-      matchedIconKeys: userDirectives?.iconDirectives.map((directive) => directive.iconKey) ?? [],
+      matchedReferenceKeys: userDirectives?.referenceDirectives.map((directive) => directive.referenceKey) ?? [],
     };
   }
 
@@ -1817,7 +1969,7 @@ const computeStyleDirectiveFit = ({
     totalGarments: lineup.length,
     matchedStyleTags: Array.from(matchedStyleTags),
     requestedStyleTags,
-    matchedIconKeys: userDirectives.iconDirectives.map((directive) => directive.iconKey),
+    matchedReferenceKeys: userDirectives.referenceDirectives.map((directive) => directive.referenceKey),
   };
 };
 
@@ -5944,10 +6096,16 @@ export async function POST(request: Request) {
 
     const userDirectives = extractUserIntentDirectives({
       userPrompt,
+      selectedTools: parsedSingleBody.data.selectedTools,
+    });
+    logInfo("[ai-look][single][step-1][selected-tools]", {
+      requested: parsedSingleBody.data.selectedTools ?? [],
+      applied: userDirectives.selectedTools,
     });
     logInfo("[ai-look][single][step-1][user-directives]", {
+      selectedTools: userDirectives.selectedTools,
       styleDirectives: userDirectives.styleDirectives,
-      iconDirectives: userDirectives.iconDirectives,
+      referenceDirectives: userDirectives.referenceDirectives,
       merged: userDirectives.merged,
     });
 
@@ -6112,7 +6270,7 @@ export async function POST(request: Request) {
             `Canonical interpreted intent:\n${JSON.stringify(canonicalIntent)}`,
             `Structured weather profile (deterministic):\n${JSON.stringify(canonicalWeatherProfile)}`,
             `Derived profile (deterministic):\n${JSON.stringify(derivedProfile)}`,
-            `User style/icon directives (deterministic):\n${JSON.stringify(userDirectives)}`,
+            `User style/reference directives (deterministic):\n${JSON.stringify(userDirectives)}`,
             weatherContextSummary || "No external weather context available.",
             `Return up to ${remaining} distinct candidates in this round.`,
             recentSignatureSet.size > 0

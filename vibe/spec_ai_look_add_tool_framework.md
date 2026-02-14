@@ -17,11 +17,11 @@ Style/reference intent is currently inferred from free text only; users need exp
 - User can add removable tool chips before submit.
 - Initial tool types:
   - `Style`
-  - `Icon`
+  - `Reference`
 
 ## Request Contract
 Extend single-look request with:
-- `selectedTools?: Array<{ type: "style" | "icon"; id: string }>`
+- `selectedTools?: Array<{ type: "style" | "reference"; id: string }>`
 
 Backward compatibility:
 - If `selectedTools` omitted, existing flow unchanged.

@@ -50,8 +50,8 @@ Use this file to track proposed features before implementation.
   - Backward-compatible API contract update.
 - **Priority**: `Now`
 - **Effort**: `L`
-- **Status**: `Planned`
-- **Notes**: This is the foundation for both Style and Icon tools below. Spec: `vibe/spec_ai_look_add_tool_framework.md`.
+- **Status**: `Done`
+- **Notes**: This is the foundation for both Style and Reference tools below. Spec: `vibe/spec_ai_look_add_tool_framework.md`.
 
 ## Next
 
@@ -74,19 +74,19 @@ Use this file to track proposed features before implementation.
 
 ## Later
 
-- **Title**: Profile-managed menswear icon library + `Icon` tool
-- **Why**: Let users personalize icon references and apply them explicitly in AI Look without hardcoded dictionaries.
+- **Title**: Profile-managed menswear reference library + `Reference` tool
+- **Why**: Let users personalize menswear references and apply them explicitly in AI Look without hardcoded dictionaries.
 - **Scope**:
-  - Add profile section `Add Menswear Icon reference`.
-  - Provide free-text name input + `Load Opinions` action that calls LLM and returns structured icon profile data.
+  - Add profile section `Add Menswear Reference`.
+  - Provide free-text name input + `Load Opinions` action that calls LLM and returns structured reference profile data.
   - Show preview of structured profile for confirmation, then save to user profile.
-  - Add `Icon`/`Reference` option under `Add Tool` to pick saved icons per request.
-  - Update AI step-1/step-2 pipeline so icon tool directives are applied deterministically in scoring/rerank.
+  - Add `Reference` option under `Add Tool` to pick saved references per request.
+  - Update AI step-1/step-2 pipeline so reference tool directives are applied deterministically in scoring/rerank.
 - **Dependencies**:
-  - DB tables for user icon profiles and versioned icon schema payload.
+  - DB tables for user reference profiles and versioned reference schema payload.
   - New owner-only API route for `Load Opinions` and save flow.
-  - Validation guardrails for LLM-generated icon schema.
+  - Validation guardrails for LLM-generated reference schema.
 - **Priority**: `Later`
 - **Effort**: `L`
 - **Status**: `Planned`
-- **Notes**: Start with owner-only profile scope; multi-user generalization can come later. Spec: `vibe/spec_profile_icons_tool.md`.
+- **Notes**: Start with owner-only profile scope; multi-user generalization can come later. Spec: `vibe/spec_profile_references_tool.md`.

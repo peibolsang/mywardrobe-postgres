@@ -10,8 +10,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { Plus } from "lucide-react";
 
 interface LookGarment {
   id: number;
@@ -121,6 +131,42 @@ type AiMode = "single" | "travel";
 type AnchorMode = "strict" | "soft";
 type FeedbackVote = "up" | "down";
 type FeedbackStatus = "idle" | "submitting" | "submitted" | "error";
+type SelectedToolType = "style" | "reference";
+
+interface SelectedToolOption {
+  type: SelectedToolType;
+  id: string;
+}
+
+interface ToolCatalogOption {
+  id: string;
+  label: string;
+}
+
+const STYLE_TOOL_OPTIONS: ToolCatalogOption[] = [
+  { id: "vintage_americana", label: "Vintage Americana" },
+  { id: "amekaji", label: "Amekaji" },
+  { id: "workwear", label: "Workwear" },
+  { id: "military_heritage", label: "Military Heritage" },
+  { id: "ivy", label: "Ivy / Trad" },
+  { id: "soft_tailoring", label: "Soft Tailoring" },
+  { id: "elevated_slouch", label: "Elevated Slouch" },
+];
+
+const REFERENCE_TOOL_OPTIONS: ToolCatalogOption[] = [
+  { id: "albert_muzquiz", label: "Albert Muzquiz" },
+  { id: "alessandro_squarzi", label: "Alessandro Squarzi" },
+  { id: "derek_guy", label: "Derek Guy" },
+  { id: "aaron_levine", label: "Aaron Levine" },
+  { id: "simon_crompton", label: "Simon Crompton" },
+];
+
+const getToolOptionLabel = (tool: SelectedToolOption): string => {
+  const options = tool.type === "style" ? STYLE_TOOL_OPTIONS : REFERENCE_TOOL_OPTIONS;
+  const match = options.find((option) => option.id === tool.id);
+  const typeLabel = tool.type === "style" ? "Style" : "Reference";
+  return match ? `${typeLabel}: ${match.label}` : `${typeLabel}: ${tool.id}`;
+};
 
 const isValidSingleLookResult = (value: unknown): value is SingleLookResult => {
   if (!value || typeof value !== "object") return false;
@@ -179,6 +225,7 @@ export default function AiLookClient() {
   const [anchorGarmentId, setAnchorGarmentId] = useState<number | null>(null);
   const [anchorMode, setAnchorMode] = useState<AnchorMode>("strict");
   const [anchorLabel, setAnchorLabel] = useState<string | null>(null);
+  const [selectedTools, setSelectedTools] = useState<SelectedToolOption[]>([]);
 
   const [destination, setDestination] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -267,6 +314,22 @@ export default function AiLookClient() {
     nextParams.delete("anchorMode");
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
+  };
+
+  const handleAddTool = (type: SelectedToolType, id: string) => {
+    if (!id) return;
+    setSelectedTools((current) => {
+      if (current.some((tool) => tool.type === type && tool.id === id)) {
+        return current;
+      }
+      return [...current, { type, id }];
+    });
+  };
+
+  const handleRemoveTool = (toolToRemove: SelectedToolOption) => {
+    setSelectedTools((current) =>
+      current.filter((tool) => !(tool.type === toolToRemove.type && tool.id === toolToRemove.id))
+    );
   };
 
   const submitFeedback = async ({
@@ -455,10 +518,14 @@ export default function AiLookClient() {
         prompt: string;
         anchorGarmentId?: number;
         anchorMode?: AnchorMode;
+        selectedTools?: SelectedToolOption[];
       } = { prompt: trimmedPrompt };
       if (anchorGarmentId != null) {
         payload.anchorGarmentId = anchorGarmentId;
         payload.anchorMode = anchorMode;
+      }
+      if (selectedTools.length > 0) {
+        payload.selectedTools = selectedTools;
       }
       const response = await fetch("/api/ai-look", {
         method: "POST",
@@ -549,6 +616,7 @@ export default function AiLookClient() {
 
   const handleClearSingle = () => {
     setPrompt("");
+    setSelectedTools([]);
     setError(null);
     setSingleResult(null);
     setSingleFeedbackVote(null);
@@ -616,7 +684,7 @@ export default function AiLookClient() {
           <CardContent id="ai-look-main-panel" role="tabpanel" className="space-y-4">
 
             {activeMode === "single" ? (
-              <form onSubmit={handleGenerateSingle} className="space-y-4">
+              <form onSubmit={handleGenerateSingle} className="space-y-3">
                 {anchorGarmentId != null && (
                   <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
                     <p className="text-sm text-slate-800">
@@ -634,15 +702,80 @@ export default function AiLookClient() {
                   placeholder="Example: I need a smart casual look for a cool evening dinner in the city."
                   className="min-h-28"
                 />
-                <div className="flex items-center gap-3">
-                  <Button type="submit" disabled={isLoading}>
-                    {isLoading ? "Generating..." : "Generate Look"}
-                  </Button>
-                  <Button type="button" variant="outline" onClick={handleClearSingle} disabled={isLoading}>
-                    Clear
-                  </Button>
-                  {error && <p className="text-sm text-red-600">{error}</p>}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8 rounded-full p-0"
+                          aria-label="Add tool"
+                          disabled={isLoading}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-56">
+                        <DropdownMenuSub>
+                          <DropdownMenuSubTrigger>Style</DropdownMenuSubTrigger>
+                          <DropdownMenuSubContent>
+                            {STYLE_TOOL_OPTIONS.map((option) => (
+                              <DropdownMenuItem
+                                key={`style-tool-${option.id}`}
+                                onClick={() => handleAddTool("style", option.id)}
+                              >
+                                {option.label}
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuSubContent>
+                        </DropdownMenuSub>
+                        <DropdownMenuSub>
+                          <DropdownMenuSubTrigger>Reference</DropdownMenuSubTrigger>
+                          <DropdownMenuSubContent>
+                            {REFERENCE_TOOL_OPTIONS.map((option) => (
+                              <DropdownMenuItem
+                                key={`reference-tool-${option.id}`}
+                                onClick={() => handleAddTool("reference", option.id)}
+                              >
+                                {option.label}
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuSubContent>
+                        </DropdownMenuSub>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    {selectedTools.map((tool) => (
+                      <span
+                        key={`${tool.type}:${tool.id}`}
+                        className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-slate-100 px-3 py-1 text-xs text-slate-700"
+                      >
+                        {getToolOptionLabel(tool)}
+                        <button
+                          type="button"
+                          className="text-slate-500 hover:text-slate-900"
+                          onClick={() => handleRemoveTool(tool)}
+                          disabled={isLoading}
+                          aria-label={`Remove ${getToolOptionLabel(tool)}`}
+                        >
+                          x
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="ml-auto flex items-center gap-3">
+                    {primaryLook ? (
+                      <Button type="button" variant="outline" onClick={handleClearSingle} disabled={isLoading}>
+                        Clear
+                      </Button>
+                    ) : null}
+                    <Button type="submit" disabled={isLoading}>
+                      {isLoading ? "Generating..." : "Generate Look"}
+                    </Button>
+                  </div>
                 </div>
+                {error && <p className="text-sm text-red-600">{error}</p>}
               </form>
             ) : (
               <form onSubmit={handleGenerateTravel} className="space-y-4">
