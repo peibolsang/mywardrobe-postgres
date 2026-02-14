@@ -193,6 +193,17 @@ interface StrictDayConstraints {
   label: string;
 }
 
+interface TravelDayConstraintEnvelope {
+  label: string;
+  relaxationLevel:
+    | "strict"
+    | "travel_top_bottom_place"
+    | "travel_top_bottom_place_occasion"
+    | "travel_top_bottom_reason";
+  defaultConstraints: StrictDayConstraints;
+  categoryOverrides: Partial<Record<GarmentCategory, StrictDayConstraints>>;
+}
+
 type AnchorMode = "strict" | "soft";
 
 interface CompactGarment {
@@ -618,8 +629,8 @@ const inferPrecipitationProfile = (description: string): {
   const normalized = normalize(description).toLowerCase();
   if (!normalized) return { type: "none", level: "none" };
 
-  const hasSnow = /\b(snow|sleet|hail|blizzard|flurr(y|ies)|ice)\b/.test(normalized);
-  const hasRain = /\b(rain|drizzle|shower|storm|thunder)\b/.test(normalized);
+  const hasSnow = /\b(snow|snowy|sleet|hail|blizzard|flurr(y|ies)|ice|icy)\b/.test(normalized);
+  const hasRain = /\b(rain|rainy|drizzle|drizzly|shower|showers|storm|stormy|thunder)\b/.test(normalized);
   const type: WeatherProfilePrecipitationType =
     hasSnow && hasRain ? "mixed" : hasSnow ? "snow" : hasRain ? "rain" : "none";
 
@@ -631,6 +642,21 @@ const inferPrecipitationProfile = (description: string): {
     return { type, level: "moderate" };
   }
   return { type, level: "light" };
+};
+
+const inferWindKmhFromDescription = (description: string): number | undefined => {
+  const normalized = normalize(description).toLowerCase();
+  if (!normalized) return undefined;
+  if (/\b(gale|gales|storm|stormy|very windy|strong winds?)\b/.test(normalized)) return 38;
+  if (/\b(windy|wind|gust|gusty|breezy|brisk)\b/.test(normalized)) return 28;
+  return undefined;
+};
+
+const inferHumidityFromDescription = (description: string): number | undefined => {
+  const normalized = normalize(description).toLowerCase();
+  if (!normalized) return undefined;
+  if (/\b(humid|damp|wet|rain|rainy|drizzle|shower|mist|fog|overcast)\b/.test(normalized)) return 80;
+  return undefined;
 };
 
 const toWindBand = (windKmh: number | null): WeatherProfileWindBand => {
@@ -697,8 +723,14 @@ const buildWeatherProfile = ({
   })();
   const precipitationLevel: WeatherProfilePrecipitationLevel =
     precipFromDescription.level !== "none" ? precipFromDescription.level : "none";
-  const humidityBand = toHumidityBand(humidity);
-  const windBand = toWindBand(typeof windKmh === "number" ? windKmh : null);
+  const inferredHumidity = typeof humidity === "number" && Number.isFinite(humidity)
+    ? humidity
+    : inferHumidityFromDescription(description ?? "");
+  const inferredWindKmh = typeof windKmh === "number" && Number.isFinite(windKmh)
+    ? windKmh
+    : inferWindKmhFromDescription(description ?? "");
+  const humidityBand = toHumidityBand(inferredHumidity);
+  const windBand = toWindBand(typeof inferredWindKmh === "number" ? inferredWindKmh : null);
   const wetSurfaceRisk = toWetSurfaceRisk({
     precipitationType,
     precipitationLevel,
@@ -1102,13 +1134,16 @@ async function fetchLlmClimateFallback(
       ...object.likelyConditions,
     ]);
 
+    const normalizedNotes = normalize(object.notes);
+    const climateDescriptor = [object.likelyConditions.join(", "), normalizedNotes].filter(Boolean).join(". ");
+
     return {
       summary: `No direct forecast for ${dateIso} in ${destination}. Using model-estimated monthly climate for ${climateMonth}: typically ${Math.round(object.avgMinTempC)}-${Math.round(object.avgMaxTempC)}°C with ${object.likelyConditions.join(", ")}. ${normalize(object.notes)}`,
       weather,
       weatherProfile: buildWeatherProfile({
         minTemp: object.avgMinTempC,
         maxTemp: object.avgMaxTempC,
-        description: object.likelyConditions.join(", "),
+        description: climateDescriptor,
         confidence: "medium",
         fallbackWeather: weather,
       }),
@@ -3968,6 +4003,7 @@ export async function POST(request: Request) {
       const dateNightOccasion = findCanonicalOption(OCCASION_OPTIONS, "Date Night / Intimate Dinner");
       const outdoorSocialOccasion = findCanonicalOption(OCCASION_OPTIONS, "Outdoor Social / Garden Party");
       const businessOccasion = findCanonicalOption(OCCASION_OPTIONS, "Business Formal");
+      const errandsOccasion = findCanonicalOption(OCCASION_OPTIONS, "Errands / Low-Key Social");
 
       const buildStrictConstraintsForDay = (
         dayWeather: TravelDayWeather,
@@ -4024,6 +4060,169 @@ export async function POST(request: Request) {
           weatherTags: toCanonicalValues(dayWeather.weather, WEATHER_OPTIONS),
         };
       });
+      const hasAnyWetTripDay = weatherByDate.days.some((day) =>
+        isWetWeatherSafetyGateActive(day.summary, day.weatherProfile)
+      );
+
+      const travelConstraintForCategory = (
+        envelope: TravelDayConstraintEnvelope,
+        category: GarmentCategory
+      ): StrictDayConstraints =>
+        envelope.categoryOverrides[category] ?? envelope.defaultConstraints;
+
+      const buildEligibleWardrobeForEnvelope = ({
+        envelope,
+        weatherTags,
+      }: {
+        envelope: TravelDayConstraintEnvelope;
+        weatherTags: string[];
+      }): CompactGarment[] =>
+        compactWardrobe.filter((garment) => {
+          const category = categorizeType(garment.type);
+          const constraints = travelConstraintForCategory(envelope, category);
+          const matchesPlace = hasAnyCanonicalMatch(garment.suitable_places ?? [], constraints.requiredPlaces);
+          const matchesOccasion = hasAnyCanonicalMatch(garment.suitable_occasions ?? [], constraints.requiredOccasions);
+          const matchesWeather = matchesWeatherIntent(garment.suitable_weather ?? [], weatherTags);
+          return matchesPlace && matchesOccasion && matchesWeather;
+        });
+
+      const resolveTravelDayConstraintEnvelope = ({
+        isTravelDay,
+        strictConstraints,
+        weatherTags,
+      }: {
+        isTravelDay: boolean;
+        strictConstraints: StrictDayConstraints;
+        weatherTags: string[];
+      }): {
+        envelope: TravelDayConstraintEnvelope;
+        eligibleWardrobe: CompactGarment[];
+        strictEligibleCount: number;
+        strictMissingCore: GarmentCategory[];
+      } => {
+        const strictEnvelope: TravelDayConstraintEnvelope = {
+          label: strictConstraints.label,
+          relaxationLevel: "strict",
+          defaultConstraints: strictConstraints,
+          categoryOverrides: {},
+        };
+        const strictEligibleWardrobe = buildEligibleWardrobeForEnvelope({
+          envelope: strictEnvelope,
+          weatherTags,
+        });
+        const strictMissingCore = missingCoreSilhouetteCategoriesFromWardrobe(
+          strictEligibleWardrobe,
+          TRAVEL_REQUIRED_CATEGORIES
+        );
+
+        if (!isTravelDay) {
+          return {
+            envelope: strictEnvelope,
+            eligibleWardrobe: strictEligibleWardrobe,
+            strictEligibleCount: strictEligibleWardrobe.length,
+            strictMissingCore,
+          };
+        }
+
+        const topBottomFallbackPlaces = Array.from(
+          new Set(
+            [transitPlace, cityPlace, officePlace, workshopPlace, atelierPlace, ...reasonIntent.place]
+              .filter((value): value is string => Boolean(value))
+          )
+        );
+        const topBottomFallbackOccasions = Array.from(
+          new Set(
+            [
+              transitOccasion,
+              commuteOccasion,
+              casualOccasion,
+              errandsOccasion,
+              businessOccasion,
+              ...reasonIntent.occasion,
+            ].filter((value): value is string => Boolean(value))
+          )
+        );
+
+        const buildTopBottomOverride = (constraints: StrictDayConstraints): Partial<Record<GarmentCategory, StrictDayConstraints>> => ({
+          top: constraints,
+          bottom: constraints,
+        });
+
+        const candidateEnvelopes: TravelDayConstraintEnvelope[] = [
+          strictEnvelope,
+          {
+            label: `${strictConstraints.label} + top/bottom place relaxation`,
+            relaxationLevel: "travel_top_bottom_place",
+            defaultConstraints: strictConstraints,
+            categoryOverrides: buildTopBottomOverride({
+              requiredPlaces: topBottomFallbackPlaces,
+              requiredOccasions: strictConstraints.requiredOccasions,
+              label: "Travel day top/bottom (place-relaxed)",
+            }),
+          },
+          {
+            label: `${strictConstraints.label} + top/bottom place+occasion relaxation`,
+            relaxationLevel: "travel_top_bottom_place_occasion",
+            defaultConstraints: strictConstraints,
+            categoryOverrides: buildTopBottomOverride({
+              requiredPlaces: topBottomFallbackPlaces,
+              requiredOccasions: topBottomFallbackOccasions,
+              label: "Travel day top/bottom (place+occasion-relaxed)",
+            }),
+          },
+          {
+            label: `${strictConstraints.label} + top/bottom reason-aware relaxation`,
+            relaxationLevel: "travel_top_bottom_reason",
+            defaultConstraints: strictConstraints,
+            categoryOverrides: buildTopBottomOverride({
+              requiredPlaces: topBottomFallbackPlaces,
+              requiredOccasions: topBottomFallbackOccasions,
+              label: "Travel day top/bottom (reason-aware)",
+            }),
+          },
+        ];
+
+        let bestEnvelope = candidateEnvelopes[0];
+        let bestEligible = strictEligibleWardrobe;
+        let bestMissing = strictMissingCore;
+
+        for (const candidate of candidateEnvelopes) {
+          const candidateEligible = buildEligibleWardrobeForEnvelope({
+            envelope: candidate,
+            weatherTags,
+          });
+          const candidateMissing = missingCoreSilhouetteCategoriesFromWardrobe(
+            candidateEligible,
+            TRAVEL_REQUIRED_CATEGORIES
+          );
+
+          const isViable = candidateEligible.length >= 4 && candidateMissing.length === 0;
+          if (isViable) {
+            return {
+              envelope: candidate,
+              eligibleWardrobe: candidateEligible,
+              strictEligibleCount: strictEligibleWardrobe.length,
+              strictMissingCore,
+            };
+          }
+
+          const isBetterThanBest =
+            candidateMissing.length < bestMissing.length ||
+            (candidateMissing.length === bestMissing.length && candidateEligible.length > bestEligible.length);
+          if (isBetterThanBest) {
+            bestEnvelope = candidate;
+            bestEligible = candidateEligible;
+            bestMissing = candidateMissing;
+          }
+        }
+
+        return {
+          envelope: bestEnvelope,
+          eligibleWardrobe: bestEligible,
+          strictEligibleCount: strictEligibleWardrobe.length,
+          strictMissingCore,
+        };
+      };
 
       if (outerwearGarmentIds.length === 0) {
         return responseJson(
@@ -4041,13 +4240,31 @@ export async function POST(request: Request) {
             const matchesWeather =
               plan.weatherTags.length === 0 ||
               Boolean(intersectionMatches(garment.suitable_weather ?? [], plan.weatherTags, { allSeasonAlias: "all season" }));
-            return matchesPlace && matchesOccasion && matchesWeather;
+            if (!matchesPlace || !matchesOccasion || !matchesWeather) return false;
+            const dayWeather = weatherByDate.days[plan.dayIndex];
+            if (!dayWeather) return false;
+            const wetSafety = assessWetWeatherSafety(
+              {
+                type: garment.type,
+                features: garment.features,
+                material_composition: garment.material_composition,
+              },
+              {
+                weatherContext: dayWeather.summary,
+                weatherProfile: dayWeather.weatherProfile,
+              }
+            );
+            return !wetSafety.gateActive || wetSafety.rainReady !== false;
           })
         );
 
       if (tripWideOuterwearCandidates.length === 0) {
         return responseJson(
-          { error: "Cannot build travel pack with one outerwear: no single jacket/coat satisfies all days (weather/place/occasion)." },
+          {
+            error: hasAnyWetTripDay
+              ? "Cannot build travel pack with one outerwear: no single rain-ready jacket/coat satisfies all days (weather/place/occasion)."
+              : "Cannot build travel pack with one outerwear: no single jacket/coat satisfies all days (weather/place/occasion).",
+          },
           { status: 422 }
         );
       }
@@ -4062,11 +4279,39 @@ export async function POST(request: Request) {
       });
 
       tripWideOuterwearCandidates.sort((left, right) => {
+        const leftRainReadyScore = hasAnyWetTripDay
+          ? (assessWetWeatherSafety(
+              {
+                type: left.type,
+                features: left.features,
+                material_composition: left.material_composition,
+              },
+              {
+                weatherContext: weatherByDate.days[0]?.summary,
+                weatherProfile: weatherByDate.days[0]?.weatherProfile ?? null,
+              }
+            ).rainReady === true ? 12 : 0)
+          : 0;
+        const rightRainReadyScore = hasAnyWetTripDay
+          ? (assessWetWeatherSafety(
+              {
+                type: right.type,
+                features: right.features,
+                material_composition: right.material_composition,
+              },
+              {
+                weatherContext: weatherByDate.days[0]?.summary,
+                weatherProfile: weatherByDate.days[0]?.weatherProfile ?? null,
+              }
+            ).rainReady === true ? 12 : 0)
+          : 0;
         const leftScore =
+          leftRainReadyScore +
           (left.favorite ? 6 : 0) +
           (tripDerivedStyling.formality && normalize(left.formality).toLowerCase() === tripDerivedStyling.formality.toLowerCase() ? 8 : 0) +
           (tripDerivedStyling.style.some((style) => normalize(left.style).toLowerCase() === style.toLowerCase()) ? 8 : 0);
         const rightScore =
+          rightRainReadyScore +
           (right.favorite ? 6 : 0) +
           (tripDerivedStyling.formality && normalize(right.formality).toLowerCase() === tripDerivedStyling.formality.toLowerCase() ? 8 : 0) +
           (tripDerivedStyling.style.some((style) => normalize(right.style).toLowerCase() === style.toLowerCase()) ? 8 : 0);
@@ -4112,11 +4357,31 @@ export async function POST(request: Request) {
         const dayWeather = weatherByDate.days[index];
         const dayPlan = dayConstraintPlans[index];
         const isTravelDay = dayPlan.isTravelDay;
+        const strictConstraints = dayPlan.strictConstraints;
+        const {
+          envelope: dayConstraintEnvelope,
+          eligibleWardrobe,
+          strictEligibleCount,
+          strictMissingCore,
+        } = resolveTravelDayConstraintEnvelope({
+          isTravelDay,
+          strictConstraints,
+          weatherTags: dayPlan.weatherTags,
+        });
+        const dayConstraintsForCategory = (category: GarmentCategory): StrictDayConstraints =>
+          travelConstraintForCategory(dayConstraintEnvelope, category);
+        const topCategoryConstraints = dayConstraintsForCategory("top");
         const dayOccasion = isTravelDay
-          ? [transitOccasion].filter((v): v is string => Boolean(v))
+          ? Array.from(new Set([
+              ...strictConstraints.requiredOccasions,
+              ...topCategoryConstraints.requiredOccasions,
+            ]))
           : reasonIntent.occasion;
         const dayPlace = isTravelDay
-          ? [transitPlace].filter((v): v is string => Boolean(v))
+          ? Array.from(new Set([
+              ...strictConstraints.requiredPlaces,
+              ...topCategoryConstraints.requiredPlaces,
+            ]))
           : reasonIntent.place;
         const fallbackDayContext: ContextIntent = {
           weather: toCanonicalValues(dayWeather.weather, WEATHER_OPTIONS),
@@ -4127,20 +4392,33 @@ export async function POST(request: Request) {
             ? `${reasonIntent.notes} This is a travel/commute day (airport/transit), prioritize mobility and comfort while staying context-appropriate. Destination: ${weatherByDate.locationLabel}.`
             : `${reasonIntent.notes} Destination: ${weatherByDate.locationLabel}.`,
         };
-        const strictConstraints = dayPlan.strictConstraints;
 
-        const eligibleWardrobe = compactWardrobe.filter((garment) => {
-          const matchesPlace = hasAnyCanonicalMatch(garment.suitable_places ?? [], strictConstraints.requiredPlaces);
-          const matchesOccasion = hasAnyCanonicalMatch(garment.suitable_occasions ?? [], strictConstraints.requiredOccasions);
-          const matchesWeather = matchesWeatherIntent(garment.suitable_weather ?? [], dayPlan.weatherTags);
-          return matchesPlace && matchesOccasion && matchesWeather;
-        });
+        if (isTravelDay && dayConstraintEnvelope.relaxationLevel !== "strict") {
+          logInfo("[ai-look][travel][constraints][relaxed]", {
+            date: dayWeather.date,
+            strictLabel: strictConstraints.label,
+            effectiveLabel: dayConstraintEnvelope.label,
+            relaxationLevel: dayConstraintEnvelope.relaxationLevel,
+            strictEligibleCount,
+            effectiveEligibleCount: eligibleWardrobe.length,
+            strictMissingCore,
+            effectiveMissingCore: missingCoreSilhouetteCategoriesFromWardrobe(
+              eligibleWardrobe,
+              TRAVEL_REQUIRED_CATEGORIES
+            ),
+            strictPlaces: strictConstraints.requiredPlaces,
+            strictOccasions: strictConstraints.requiredOccasions,
+            topBottomPlaces: topCategoryConstraints.requiredPlaces,
+            topBottomOccasions: topCategoryConstraints.requiredOccasions,
+          });
+        }
+
         const eligibleIdSet = new Set(eligibleWardrobe.map((garment) => garment.id));
 
         if (eligibleWardrobe.length < 4) {
           skippedDays.push({
             date: dayWeather.date,
-            reason: `Not enough garments satisfy strict ${strictConstraints.label.toLowerCase()} weather/place/occasion constraints.`,
+            reason: `Not enough garments satisfy ${dayConstraintEnvelope.label.toLowerCase()} weather/place/occasion constraints.`,
             weatherContext: dayWeather.summary,
             weatherStatus: dayWeather.status,
           });
@@ -4154,7 +4432,7 @@ export async function POST(request: Request) {
         if (missingCoreInEligible.length > 0) {
           skippedDays.push({
             date: dayWeather.date,
-            reason: `Strict ${strictConstraints.label.toLowerCase()} weather/place/occasion constraints do not include required ${missingCoreInEligible.join(", ")} garments for a full look.`,
+            reason: `${dayConstraintEnvelope.label} weather/place/occasion constraints do not include required ${missingCoreInEligible.join(", ")} garments for a full look.`,
             weatherContext: dayWeather.summary,
             weatherStatus: dayWeather.status,
           });
@@ -4180,6 +4458,9 @@ export async function POST(request: Request) {
                 isTravelDay,
                 strictRequiredPlaces: strictConstraints.requiredPlaces,
                 strictRequiredOccasions: strictConstraints.requiredOccasions,
+                effectiveTopBottomPlaces: topCategoryConstraints.requiredPlaces,
+                effectiveTopBottomOccasions: topCategoryConstraints.requiredOccasions,
+                constraintRelaxationLevel: dayConstraintEnvelope.relaxationLevel,
               })}`,
               "Map this day to canonical intent arrays and concise notes.",
             ].join("\n\n"),
@@ -4188,19 +4469,19 @@ export async function POST(request: Request) {
           dayContext = {
             weather: (() => {
               const interpretedWeather = toCanonicalValues(interpretedTravelDayContext.weather, WEATHER_OPTIONS);
-              if (interpretedWeather.length > 0) return interpretedWeather;
-              return fallbackDayContext.weather;
+              const merged = Array.from(new Set([...fallbackDayContext.weather, ...interpretedWeather]));
+              return merged.length > 0 ? merged : fallbackDayContext.weather;
             })(),
             occasion: (() => {
               const merged = [
-                ...strictConstraints.requiredOccasions,
+                ...fallbackDayContext.occasion,
                 ...toCanonicalValues(interpretedTravelDayContext.occasion, OCCASION_OPTIONS),
               ];
               return merged.length > 0 ? Array.from(new Set(merged)) : fallbackDayContext.occasion;
             })(),
             place: (() => {
               const merged = [
-                ...strictConstraints.requiredPlaces,
+                ...fallbackDayContext.place,
                 ...toCanonicalValues(interpretedTravelDayContext.place, PLACE_OPTIONS),
               ];
               return merged.length > 0 ? Array.from(new Set(merged)) : fallbackDayContext.place;
@@ -4337,8 +4618,12 @@ export async function POST(request: Request) {
               dayPlan.weatherTags.length > 0
                 ? `STRICT WEATHER RULE (every selected garment must match at least one): ${JSON.stringify(dayPlan.weatherTags)}`
                 : "No strict weather tags available for this day.",
-              `STRICT PLACE RULE (every selected garment must match at least one): ${JSON.stringify(strictConstraints.requiredPlaces)}`,
-              `STRICT OCCASION RULE (every selected garment must match at least one): ${JSON.stringify(strictConstraints.requiredOccasions)}`,
+              isTravelDay && dayConstraintEnvelope.relaxationLevel !== "strict"
+                ? `STRICT PLACE RULE: outerwear+footwear must match ${JSON.stringify(strictConstraints.requiredPlaces)}; top+bottom may match ${JSON.stringify(topCategoryConstraints.requiredPlaces)}.`
+                : `STRICT PLACE RULE (every selected garment must match at least one): ${JSON.stringify(strictConstraints.requiredPlaces)}`,
+              isTravelDay && dayConstraintEnvelope.relaxationLevel !== "strict"
+                ? `STRICT OCCASION RULE: outerwear+footwear must match ${JSON.stringify(strictConstraints.requiredOccasions)}; top+bottom may match ${JSON.stringify(topCategoryConstraints.requiredOccasions)}.`
+                : `STRICT OCCASION RULE (every selected garment must match at least one): ${JSON.stringify(strictConstraints.requiredOccasions)}`,
               `Wardrobe JSON: ${JSON.stringify(promptWardrobe)}`,
             ].join("\n\n"),
           });
@@ -4559,12 +4844,16 @@ export async function POST(request: Request) {
           const violatesPlaceRule = orderedIds.some((id) => {
             const garment = garmentById.get(id);
             if (!garment) return true;
-            return !hasAnyCanonicalMatch(garment.suitable_places ?? [], strictConstraints.requiredPlaces);
+            const category = categorizeType(garment.type);
+            const constraints = dayConstraintsForCategory(category);
+            return !hasAnyCanonicalMatch(garment.suitable_places ?? [], constraints.requiredPlaces);
           });
           const violatesOccasionRule = orderedIds.some((id) => {
             const garment = garmentById.get(id);
             if (!garment) return true;
-            return !hasAnyCanonicalMatch(garment.suitable_occasions ?? [], strictConstraints.requiredOccasions);
+            const category = categorizeType(garment.type);
+            const constraints = dayConstraintsForCategory(category);
+            return !hasAnyCanonicalMatch(garment.suitable_occasions ?? [], constraints.requiredOccasions);
           });
           const violatesWeatherRule =
             dayPlan.weatherTags.length > 0 &&
@@ -4761,7 +5050,7 @@ export async function POST(request: Request) {
                       : violatesHardConstraintRule
                         ? "Could not satisfy wet-weather safety rule (rain-ready outerwear/footwear required)."
                       : violatesPlaceRule || violatesOccasionRule || violatesWeatherRule
-                        ? `Could not satisfy strict ${strictConstraints.label.toLowerCase()} weather/place/occasion constraints.`
+                        ? `Could not satisfy ${dayConstraintEnvelope.label.toLowerCase()} weather/place/occasion constraints.`
                         : "Could not satisfy day constraints.",
             weatherContext: dayWeather.summary,
             weatherStatus: dayWeather.status,
