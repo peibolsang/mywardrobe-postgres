@@ -233,7 +233,29 @@ type WeatherContextSource =
   | "none"
   | "model_tool"
   | "forced_tool"
-  | "direct_fetch";
+  | "direct_fetch"
+  | "forecast_api"
+  | "llm_climate_fallback"
+  | "seasonal_fallback";
+
+type SingleTemporalTargetType = "current" | "single_date" | "date_range" | "unknown";
+type SingleTemporalWeatherStatus = "current" | "forecast" | "seasonal" | "failed";
+
+interface SingleTemporalTargetResolution {
+  targetType: SingleTemporalTargetType;
+  targetDate: string | null;
+  targetRange: { startDate: string; endDate: string } | null;
+  trigger: string | null;
+  resolvedBy: "keyword" | "weekday" | "explicit_date" | "none";
+}
+
+interface SingleTemporalWeatherResolution {
+  weatherContextSummary: string;
+  weatherTags: string[];
+  weatherProfile: WeatherProfile;
+  source: Exclude<WeatherContextSource, "none" | "model_tool" | "forced_tool" | "direct_fetch">;
+  status: SingleTemporalWeatherStatus;
+}
 
 type InMemoryRateLimitState = {
   count: number;
@@ -467,6 +489,16 @@ const stripWeatherStatusClaims = (value: string): string =>
     .replace(/\s{2,}/g, " ")
     .trim();
 
+const stripStyleDirectiveDisclaimers = (value: string): string =>
+  normalize(value)
+    .replace(
+      /\b[a-z\s/-]*style\s+noted\s+but\s+not\s+(?:categorized|returned|output|included)[^.]*\.?/gi,
+      ""
+    )
+    .replace(/\bas\s+per\s+instructions[^.]*\.?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
 const buildWeatherLocationQueryVariants = (locationQuery: string): string[] => {
   const base = normalize(locationQuery).replace(/\s+/g, " ").trim();
   if (!base) return [];
@@ -495,6 +527,22 @@ const summarizeWeatherContext = (weatherContext: string): string => {
   const normalized = normalize(weatherContext);
   if (!normalized) return "";
 
+  const noDirectForecastMatch = normalized.match(/^No direct forecast for\s+(\d{4}-\d{2}-\d{2})\s+in\s+([^\.]+)\./i);
+  if (noDirectForecastMatch?.[1] && noDirectForecastMatch?.[2]) {
+    const dateIso = normalize(noDirectForecastMatch[1]);
+    const location = normalize(noDirectForecastMatch[2]);
+    const remainder = normalize(
+      normalized.replace(/^No direct forecast for\s+\d{4}-\d{2}-\d{2}\s+in\s+[^\.]+\.\s*/i, "")
+    );
+    const details = remainder || normalized;
+    return toSentence(`Weather outlook for ${location} on ${dateIso}: ${details}`);
+  }
+
+  const datedForecastMatch = normalized.match(/^([^:]+)\s+on\s+(\d{4}-\d{2}-\d{2}):/i);
+  const rangeForecastMatch = normalized.match(
+    /^Weather context for\s+([^:]+)\s+from\s+(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2}):/i
+  );
+
   const locationMatch = normalized.match(/^Weather context for\s+([^:]+):/i);
   const conditionsMatch = normalized.match(/Current conditions look\s+([^\.]+)\./i);
   const rangeMatch = normalized.match(/Expected range\s+([^\.]+)\./i);
@@ -511,10 +559,26 @@ const summarizeWeatherContext = (weatherContext: string): string => {
   if (range) detailParts.push(`range ${range}`);
 
   if (detailParts.length === 0) {
-    return toSentence(`Current weather considered: ${normalized}`);
+    if (rangeForecastMatch?.[1] && rangeForecastMatch?.[2] && rangeForecastMatch?.[3]) {
+      return toSentence(
+        `Weather outlook for ${normalize(rangeForecastMatch[1])} from ${normalize(rangeForecastMatch[2])} to ${normalize(rangeForecastMatch[3])}: ${normalized}`
+      );
+    }
+    if (datedForecastMatch?.[1] && datedForecastMatch?.[2]) {
+      return toSentence(
+        `Weather outlook for ${normalize(datedForecastMatch[1])} on ${normalize(datedForecastMatch[2])}: ${normalized}`
+      );
+    }
+    return toSentence(`Weather context considered: ${normalized}`);
   }
 
-  const lead = location ? `Current weather in ${location}` : "Current weather";
+  const lead = rangeForecastMatch?.[1] && rangeForecastMatch?.[2] && rangeForecastMatch?.[3]
+    ? `Weather outlook for ${normalize(rangeForecastMatch[1])} from ${normalize(rangeForecastMatch[2])} to ${normalize(rangeForecastMatch[3])}`
+    : datedForecastMatch?.[1] && datedForecastMatch?.[2]
+      ? `Weather for ${normalize(datedForecastMatch[1])} on ${normalize(datedForecastMatch[2])}`
+      : location
+        ? `Current weather in ${location}`
+        : "Current weather";
   return toSentence(`${lead}: ${detailParts.join(", ")}`);
 };
 
@@ -1104,6 +1168,319 @@ async function fetchTravelWeatherByDateRange(
 
   return { locationLabel, days };
 }
+
+const WEEKDAY_TO_INDEX: Record<string, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+
+const addUtcDays = (date: Date, days: number): Date => {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+};
+
+const sanitizeNaturalDatePhrase = (value: string): string =>
+  normalize(value)
+    .replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const parseExplicitDateFromPrompt = (prompt: string): string | null => {
+  const isoMatch = normalize(prompt).match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  if (isoMatch?.[1]) {
+    const parsed = parseIsoDate(isoMatch[1]);
+    if (parsed) return toIsoDate(parsed);
+  }
+
+  const naturalMatch = normalize(prompt).match(
+    /\b(?:on\s+)?([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?)\b/i
+  );
+  if (!naturalMatch?.[1]) return null;
+  const sanitized = sanitizeNaturalDatePhrase(naturalMatch[1]);
+  const parsedMillis = Date.parse(`${sanitized} UTC`);
+  if (!Number.isFinite(parsedMillis)) return null;
+  const parsed = new Date(parsedMillis);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return toIsoDate(new Date(Date.UTC(
+    parsed.getUTCFullYear(),
+    parsed.getUTCMonth(),
+    parsed.getUTCDate()
+  )));
+};
+
+const resolveSingleTemporalTargetFromPrompt = (
+  prompt: string,
+  now: Date = new Date()
+): SingleTemporalTargetResolution => {
+  const normalized = normalize(prompt).toLowerCase();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+  if (!normalized) {
+    return {
+      targetType: "unknown",
+      targetDate: null,
+      targetRange: null,
+      trigger: null,
+      resolvedBy: "none",
+    };
+  }
+
+  if (/\b(now|today|tonight)\b/.test(normalized)) {
+    return {
+      targetType: "current",
+      targetDate: toIsoDate(today),
+      targetRange: null,
+      trigger: "today",
+      resolvedBy: "keyword",
+    };
+  }
+
+  if (/\btomorrow\b/.test(normalized)) {
+    return {
+      targetType: "single_date",
+      targetDate: toIsoDate(addUtcDays(today, 1)),
+      targetRange: null,
+      trigger: "tomorrow",
+      resolvedBy: "keyword",
+    };
+  }
+
+  if (/\bnext week\b/.test(normalized)) {
+    const currentWeekday = today.getUTCDay();
+    const daysUntilNextMonday = ((1 - currentWeekday + 7) % 7) || 7;
+    const start = addUtcDays(today, daysUntilNextMonday);
+    const end = addUtcDays(start, 6);
+    return {
+      targetType: "date_range",
+      targetDate: null,
+      targetRange: {
+        startDate: toIsoDate(start),
+        endDate: toIsoDate(end),
+      },
+      trigger: "next week",
+      resolvedBy: "keyword",
+    };
+  }
+
+  const weekdayMatch = normalized.match(
+    /\b(this|next)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/
+  );
+  if (weekdayMatch?.[1] && weekdayMatch?.[2]) {
+    const modifier = weekdayMatch[1];
+    const weekdayLabel = weekdayMatch[2];
+    const targetWeekday = WEEKDAY_TO_INDEX[weekdayLabel];
+    const currentWeekday = today.getUTCDay();
+    let delta = (targetWeekday - currentWeekday + 7) % 7;
+    if (modifier === "next") {
+      delta = delta === 0 ? 7 : delta;
+    }
+    const targetDate = addUtcDays(today, delta);
+    return {
+      targetType: "single_date",
+      targetDate: toIsoDate(targetDate),
+      targetRange: null,
+      trigger: `${modifier} ${weekdayLabel}`,
+      resolvedBy: "weekday",
+    };
+  }
+
+  const explicitDate = parseExplicitDateFromPrompt(prompt);
+  if (explicitDate) {
+    return {
+      targetType: "single_date",
+      targetDate: explicitDate,
+      targetRange: null,
+      trigger: explicitDate,
+      resolvedBy: "explicit_date",
+    };
+  }
+
+  return {
+    targetType: "unknown",
+    targetDate: null,
+    targetRange: null,
+    trigger: null,
+    resolvedBy: "none",
+  };
+};
+
+const WEATHER_TEMP_ORDER: WeatherProfileTempBand[] = ["cold", "cool", "mild", "warm", "hot"];
+const WEATHER_PRECIP_ORDER: WeatherProfilePrecipitationLevel[] = ["none", "light", "moderate", "heavy"];
+const WEATHER_WIND_ORDER: WeatherProfileWindBand[] = ["calm", "breezy", "windy"];
+const WEATHER_HUMIDITY_ORDER: WeatherProfileHumidityBand[] = ["dry", "normal", "humid"];
+const WEATHER_WET_RISK_ORDER: WeatherProfileWetRisk[] = ["low", "medium", "high"];
+const WEATHER_CONFIDENCE_ORDER: WeatherProfileConfidence[] = ["low", "medium", "high"];
+
+const maxByOrder = <T extends string>(values: T[], order: readonly T[], fallback: T): T => {
+  let best = fallback;
+  let bestIndex = order.indexOf(fallback);
+  for (const value of values) {
+    const index = order.indexOf(value);
+    if (index > bestIndex) {
+      best = value;
+      bestIndex = index;
+    }
+  }
+  return best;
+};
+
+const minByOrder = <T extends string>(values: T[], order: readonly T[], fallback: T): T => {
+  let best = fallback;
+  let bestIndex = order.indexOf(fallback);
+  for (const value of values) {
+    const index = order.indexOf(value);
+    if (index >= 0 && index < bestIndex) {
+      best = value;
+      bestIndex = index;
+    }
+  }
+  return best;
+};
+
+const inferTemporalWeatherSourceFromTravelDay = (
+  day: TravelDayWeather
+): Exclude<WeatherContextSource, "none" | "model_tool" | "forced_tool" | "direct_fetch"> => {
+  if (day.status === "forecast") return "forecast_api";
+  if (day.status === "failed") return "seasonal_fallback";
+  const summary = normalize(day.summary).toLowerCase();
+  if (summary.includes("model-estimated monthly climate")) {
+    return "llm_climate_fallback";
+  }
+  return "seasonal_fallback";
+};
+
+const aggregateSingleTemporalWeatherFromDays = ({
+  locationLabel,
+  days,
+  startDate,
+  endDate,
+}: {
+  locationLabel: string;
+  days: TravelDayWeather[];
+  startDate: string;
+  endDate: string;
+}): SingleTemporalWeatherResolution | null => {
+  if (days.length === 0) return null;
+
+  const weatherTags = dedupeCanonicalWeather(days.flatMap((day) => day.weather));
+  const tempBand = minByOrder(
+    days.map((day) => day.weatherProfile.tempBand),
+    WEATHER_TEMP_ORDER,
+    "mild"
+  );
+  const precipitationLevel = maxByOrder(
+    days.map((day) => day.weatherProfile.precipitationLevel),
+    WEATHER_PRECIP_ORDER,
+    "none"
+  );
+  const precipitationTypes = new Set(
+    days.map((day) => day.weatherProfile.precipitationType).filter((value) => value !== "none")
+  );
+  const precipitationType: WeatherProfilePrecipitationType = precipitationTypes.size > 1
+    ? "mixed"
+    : (precipitationTypes.values().next().value ?? "none");
+  const windBand = maxByOrder(
+    days.map((day) => day.weatherProfile.windBand),
+    WEATHER_WIND_ORDER,
+    "calm"
+  );
+  const humidityBand = maxByOrder(
+    days.map((day) => day.weatherProfile.humidityBand),
+    WEATHER_HUMIDITY_ORDER,
+    "normal"
+  );
+  const wetSurfaceRisk = maxByOrder(
+    days.map((day) => day.weatherProfile.wetSurfaceRisk),
+    WEATHER_WET_RISK_ORDER,
+    "low"
+  );
+  const confidence = minByOrder(
+    days.map((day) => day.weatherProfile.confidence),
+    WEATHER_CONFIDENCE_ORDER,
+    "high"
+  );
+
+  const profile: WeatherProfile = {
+    tempBand,
+    precipitationLevel,
+    precipitationType,
+    windBand,
+    humidityBand,
+    wetSurfaceRisk,
+    confidence,
+  };
+
+  const sources = new Set(days.map(inferTemporalWeatherSourceFromTravelDay));
+  const source: Exclude<WeatherContextSource, "none" | "model_tool" | "forced_tool" | "direct_fetch"> =
+    sources.has("forecast_api")
+      ? (sources.size === 1 ? "forecast_api" : "llm_climate_fallback")
+      : sources.has("llm_climate_fallback")
+        ? "llm_climate_fallback"
+        : "seasonal_fallback";
+  const status: SingleTemporalWeatherStatus = source === "forecast_api" ? "forecast" : "seasonal";
+  const summary = [
+    `Weather context for ${locationLabel} from ${startDate} to ${endDate}:`,
+    `Aggregated from ${days.length} daily estimates.`,
+    weatherTags.length > 0 ? `Likely conditions include ${joinNaturalList(weatherTags)}.` : "",
+    `Highest precipitation signal: ${precipitationLevel}${precipitationType !== "none" ? ` (${precipitationType})` : ""}.`,
+    `Wet-surface risk: ${wetSurfaceRisk}.`,
+  ].filter(Boolean).join(" ");
+
+  return {
+    weatherContextSummary: summary,
+    weatherTags,
+    weatherProfile: profile,
+    source,
+    status,
+  };
+};
+
+const resolveSingleTemporalWeather = async ({
+  locationHint,
+  temporalTarget,
+}: {
+  locationHint: string;
+  temporalTarget: SingleTemporalTargetResolution;
+}): Promise<SingleTemporalWeatherResolution | null> => {
+  if (temporalTarget.targetType === "single_date" && temporalTarget.targetDate) {
+    const weatherByDate = await fetchTravelWeatherByDateRange(locationHint, [temporalTarget.targetDate]);
+    const day = weatherByDate.days[0];
+    if (!day) return null;
+    const source = inferTemporalWeatherSourceFromTravelDay(day);
+    const status: SingleTemporalWeatherStatus =
+      day.status === "forecast" ? "forecast" : day.status === "seasonal" ? "seasonal" : "failed";
+    return {
+      weatherContextSummary: day.summary,
+      weatherTags: dedupeCanonicalWeather(day.weather),
+      weatherProfile: day.weatherProfile,
+      source,
+      status,
+    };
+  }
+
+  if (temporalTarget.targetType === "date_range" && temporalTarget.targetRange) {
+    const dates = enumerateDateRange(
+      temporalTarget.targetRange.startDate,
+      temporalTarget.targetRange.endDate
+    );
+    if (dates.length === 0) return null;
+    const weatherByDate = await fetchTravelWeatherByDateRange(locationHint, dates);
+    return aggregateSingleTemporalWeatherFromDays({
+      locationLabel: weatherByDate.locationLabel,
+      days: weatherByDate.days,
+      startDate: temporalTarget.targetRange.startDate,
+      endDate: temporalTarget.targetRange.endDate,
+    });
+  }
+
+  return null;
+};
 
 const monthLabel = (dateIso: string): string => {
   const date = parseIsoDate(dateIso) ?? new Date();
@@ -3020,6 +3397,22 @@ const computeObjectiveMatchScore = (
   return Math.round(average);
 };
 
+const normalizeModelConfidence = (raw: number): number => {
+  if (!Number.isFinite(raw)) return 50;
+  const clamped = Math.max(0, raw);
+
+  // Heuristic normalization for common LLM scale drift:
+  // - 0.x -> percentage (x100)
+  // - 1..10 -> decile scale (x10)
+  if (clamped > 0 && clamped < 1) {
+    return Math.max(0, Math.min(100, Math.round(clamped * 100)));
+  }
+  if (clamped >= 1 && clamped <= 10) {
+    return Math.max(0, Math.min(100, Math.round(clamped * 10)));
+  }
+  return Math.max(0, Math.min(100, Math.round(clamped)));
+};
+
 const toValidatedSingleLookCandidate = ({
   lookName,
   modelConfidence,
@@ -3103,7 +3496,7 @@ const toValidatedSingleLookCandidate = ({
     derivedProfile,
     userDirectives,
   });
-  const roundedModelConfidence = Math.max(0, Math.min(100, Math.round(modelConfidence)));
+  const roundedModelConfidence = normalizeModelConfidence(modelConfidence);
   const confidence = Math.max(
     20,
     Math.min(100, Math.round((roundedModelConfidence * 0.3) + (matchScore * 0.7)))
@@ -3313,22 +3706,37 @@ const buildSingleRequestFingerprint = ({
   place,
   timeOfDay,
   locationHint,
+  temporalTarget,
 }: {
   weather: string[];
   occasion: string[];
   place: string[];
   timeOfDay: string[];
   locationHint?: string | null;
+  temporalTarget?: SingleTemporalTargetResolution | null;
 }): string =>
-  [
-    "single",
-    normalizeFingerprintSegment(locationHint ?? ""),
-    normalizeFingerprintSegment(weather.join(",")),
-    normalizeFingerprintSegment(occasion.join(",")),
-    normalizeFingerprintSegment(place.join(",")),
-    normalizeFingerprintSegment(timeOfDay.join(",")),
-    normalizeFingerprintSegment(new Date().toISOString().slice(0, 10)),
-  ].join("|");
+  {
+    const temporalDateSegment = (() => {
+      if (!temporalTarget) return new Date().toISOString().slice(0, 10);
+      if (temporalTarget.targetType === "single_date" && temporalTarget.targetDate) {
+        return temporalTarget.targetDate;
+      }
+      if (temporalTarget.targetType === "date_range" && temporalTarget.targetRange) {
+        return `${temporalTarget.targetRange.startDate}_${temporalTarget.targetRange.endDate}`;
+      }
+      return new Date().toISOString().slice(0, 10);
+    })();
+
+    return [
+      "single",
+      normalizeFingerprintSegment(locationHint ?? ""),
+      normalizeFingerprintSegment(weather.join(",")),
+      normalizeFingerprintSegment(occasion.join(",")),
+      normalizeFingerprintSegment(place.join(",")),
+      normalizeFingerprintSegment(timeOfDay.join(",")),
+      normalizeFingerprintSegment(temporalDateSegment),
+    ].join("|");
+  };
 
 const getRecentSingleLookHistory = async (ownerKey: string): Promise<SingleLookHistoryEntry[]> => {
   const rows = await sql`
@@ -5073,7 +5481,7 @@ export async function POST(request: Request) {
           weatherProfile: dayWeather.weatherProfile,
           derivedProfile: dayDerivedProfile,
         });
-        const modelConfidence = Math.round(generatedDay.modelConfidence);
+        const modelConfidence = normalizeModelConfidence(generatedDay.modelConfidence);
         const confidence = Math.max(
           20,
           Math.min(100, Math.round((modelConfidence * 0.3) + (matchScore * 0.7)))
@@ -5282,14 +5690,63 @@ export async function POST(request: Request) {
     let resolvedWeatherProfile: WeatherProfile | null = weatherOutput?.weatherProfile ?? null;
     let weatherStatus: WeatherContextStatus = "not_requested";
     let weatherContextSource: WeatherContextSource = weatherContextSummary ? "model_tool" : "none";
+    let temporalWeatherStatus: SingleTemporalWeatherStatus | null = null;
 
     // Fallback: if first pass skipped tool call, force one when a location hint exists.
     const locationHint = extractLocationHintFromPrompt(userPrompt);
+    const temporalTarget = resolveSingleTemporalTargetFromPrompt(userPrompt, new Date());
     if (locationHint) {
       weatherStatus = "location_detected";
     }
+    logInfo(
+      "[ai-look][single][step-1][temporal-resolution]",
+      {
+        targetType: temporalTarget.targetType,
+        targetDate: temporalTarget.targetDate,
+        targetRange: temporalTarget.targetRange,
+        trigger: temporalTarget.trigger,
+        resolvedBy: temporalTarget.resolvedBy,
+        locationHint: locationHint || null,
+      }
+    );
 
-    if (!weatherContextSummary) {
+    const temporalDateAwareTarget =
+      Boolean(locationHint) &&
+      (temporalTarget.targetType === "single_date" || temporalTarget.targetType === "date_range");
+
+    if (temporalDateAwareTarget && locationHint) {
+      weatherContextSummary = "";
+      resolvedWeatherTags = [];
+      resolvedWeatherProfile = null;
+      weatherContextSource = "none";
+
+      try {
+        const temporalWeather = await resolveSingleTemporalWeather({
+          locationHint,
+          temporalTarget,
+        });
+        if (temporalWeather) {
+          weatherContextSummary = normalize(temporalWeather.weatherContextSummary);
+          resolvedWeatherTags = dedupeCanonicalWeather(temporalWeather.weatherTags);
+          resolvedWeatherProfile = temporalWeather.weatherProfile;
+          weatherContextSource = temporalWeather.source;
+          temporalWeatherStatus = temporalWeather.status;
+        } else {
+          temporalWeatherStatus = "failed";
+        }
+      } catch (error) {
+        temporalWeatherStatus = "failed";
+        logWarn("[ai-look][single][weather][temporal-fetch-failed]", {
+          locationHint,
+          targetType: temporalTarget.targetType,
+          targetDate: temporalTarget.targetDate,
+          targetRange: temporalTarget.targetRange,
+          error: toErrorDetails(error),
+        });
+      }
+    }
+
+    if (!temporalDateAwareTarget && !weatherContextSummary) {
       if (locationHint) {
         const fallbackWeather = await generateText({
           model: openai("gpt-4.1-mini"),
@@ -5336,7 +5793,7 @@ export async function POST(request: Request) {
     }
 
     // Final fallback: deterministic server-side fetch if tool path returned no weather.
-    if (!weatherContextSummary && locationHint) {
+    if (!temporalDateAwareTarget && !weatherContextSummary && locationHint) {
       try {
         const directWeather = await fetchWeatherContext(locationHint);
         weatherContextSummary = normalize(directWeather?.summary);
@@ -5358,10 +5815,18 @@ export async function POST(request: Request) {
       }
     }
 
-    if (weatherContextSummary) {
-      weatherStatus = "fetched";
-    } else if (locationHint) {
-      weatherStatus = "failed";
+    if (temporalDateAwareTarget) {
+      if (temporalWeatherStatus && temporalWeatherStatus !== "failed") {
+        weatherStatus = "fetched";
+      } else if (locationHint) {
+        weatherStatus = "failed";
+      }
+    } else {
+      if (weatherContextSummary) {
+        weatherStatus = "fetched";
+      } else if (locationHint) {
+        weatherStatus = "failed";
+      }
     }
     logInfo(
       "[ai-look][single][step-1][weather-resolution]",
@@ -5369,6 +5834,10 @@ export async function POST(request: Request) {
         weatherStatus,
         weatherContextSource,
         locationHint: locationHint || null,
+        temporalTargetType: temporalTarget.targetType,
+        temporalTargetDate: temporalTarget.targetDate,
+        temporalTargetRange: temporalTarget.targetRange,
+        temporalWeatherStatus,
         resolvedWeatherTags,
         weatherProfile: resolvedWeatherProfile,
       }
@@ -5377,10 +5846,11 @@ export async function POST(request: Request) {
     const interpretedWeather = toCanonicalValues(interpretedContext.weather, WEATHER_OPTIONS);
     const canonicalWeather = resolvedWeatherTags.length > 0 ? resolvedWeatherTags : interpretedWeather;
     const interpretedNotes = normalize(interpretedContext.notes);
-    const withoutWeatherStatusClaims = stripWeatherStatusClaims(interpretedNotes);
+    const cleanedInterpretedNotes = stripStyleDirectiveDisclaimers(interpretedNotes);
+    const withoutWeatherStatusClaims = stripWeatherStatusClaims(cleanedInterpretedNotes);
     const canonicalNotes = weatherContextSummary
       ? withoutWeatherStatusClaims
-      : withoutWeatherStatusClaims || interpretedNotes;
+      : withoutWeatherStatusClaims || cleanedInterpretedNotes;
 
     const canonicalContext: ContextIntent = {
       weather: canonicalWeather,
@@ -5814,6 +6284,7 @@ export async function POST(request: Request) {
       place: canonicalContext.place,
       timeOfDay: canonicalContext.timeOfDay,
       locationHint,
+      temporalTarget,
     });
 
     logInfo(
@@ -5837,6 +6308,8 @@ export async function POST(request: Request) {
         }),
         weatherContext: weatherContextSummary || null,
         weatherContextStatus: weatherStatus,
+        weatherTemporalTarget: temporalTarget,
+        weatherTemporalStatus: temporalWeatherStatus,
       }
     );
 
@@ -5868,6 +6341,8 @@ export async function POST(request: Request) {
       }),
       weatherContext: weatherContextSummary || null,
       weatherContextStatus: weatherStatus,
+      weatherTemporalTarget: temporalTarget,
+      weatherTemporalStatus: temporalWeatherStatus,
     });
   } catch (error) {
     logError("[ai-look][request][failed]", {
