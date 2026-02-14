@@ -116,6 +116,46 @@ interface DerivedProfile {
   };
 }
 
+type DirectiveConfidence = "high" | "medium" | "low";
+
+interface UserStyleDirective {
+  key: string;
+  sourceTerms: string[];
+  canonicalStyleTags: string[];
+  silhouetteBiasTags: string[];
+  materialBias: {
+    prefer: string[];
+    avoid: string[];
+  };
+  formalityBias: string | null;
+  confidence: DirectiveConfidence;
+}
+
+interface UserIconDirective {
+  iconKey: string;
+  sourceTerms: string[];
+  styleBiasTags: string[];
+  silhouetteBiasTags: string[];
+  materialBias: {
+    prefer: string[];
+    avoid: string[];
+  };
+  formalityBias: string | null;
+  confidence: DirectiveConfidence;
+}
+
+interface UserIntentDirectives {
+  styleDirectives: UserStyleDirective[];
+  iconDirectives: UserIconDirective[];
+  merged: {
+    styleTagsPrefer: string[];
+    silhouetteTagsPrefer: string[];
+    materialPrefer: string[];
+    materialAvoid: string[];
+    formalityBias: string | null;
+  };
+}
+
 interface WeatherContext {
   locationLabel: string;
   summary: string;
@@ -251,6 +291,127 @@ const SINGLE_LOOK_TARGET_CANDIDATES = 6;
 const SINGLE_LOOK_MAX_GENERATION_ATTEMPTS = 2;
 const SINGLE_RECENT_HISTORY_LIMIT = 18;
 const TRAVEL_HISTORY_ROW_LIMIT = 240;
+
+const STYLE_ALIAS_DICTIONARY: Array<{
+  key: string;
+  terms: string[];
+  styleTags: string[];
+  silhouetteTags: string[];
+  materialPrefer: string[];
+  materialAvoid: string[];
+  formalityBias?: string | null;
+}> = [
+  {
+    key: "vintage_americana",
+    terms: ["vintage americana", "heritage style", "mid-century casual"],
+    styleTags: ["vintage", "retro", "timeless", "authentic"],
+    silhouetteTags: ["high-rise", "boxy", "straight"],
+    materialPrefer: ["selvedge denim", "aged leather", "loopwheel cotton", "wool"],
+    materialAvoid: ["polyester", "modern technical fabrics"],
+    formalityBias: "Elevated Casual",
+  },
+  {
+    key: "amekaji",
+    terms: ["amekaji", "american casual", "japanese americana"],
+    styleTags: ["vintage", "workwear", "western", "classic"],
+    silhouetteTags: ["heritage", "rugged"],
+    materialPrefer: ["denim", "canvas", "twill", "leather", "flannel"],
+    materialAvoid: [],
+    formalityBias: "Elevated Casual",
+  },
+  {
+    key: "workwear",
+    terms: ["heritage workwear", "utilitarian", "rugged", "manual style"],
+    styleTags: ["functional", "industrial", "durable", "vintage"],
+    silhouetteTags: ["boxy", "straight leg", "oversized"],
+    materialPrefer: ["duck canvas", "heavy denim", "moleskin", "corduroy"],
+    materialAvoid: ["silk", "fine gauge knits", "delicate blends"],
+    formalityBias: "Rugged Casual",
+  },
+  {
+    key: "ivy",
+    terms: ["ivy league", "trad", "soft prep", "collegiate"],
+    styleTags: ["academic", "classic", "preppy", "conservative"],
+    silhouetteTags: ["natural shoulder", "tapered", "tailored"],
+    materialPrefer: ["oxford cloth", "shetland wool", "cotton twill", "seersucker"],
+    materialAvoid: ["technical fabrics", "synthetic blends"],
+    formalityBias: "Business Casual",
+  },
+  {
+    key: "soft_tailoring",
+    terms: ["neapolitan", "florentine", "sartorial casual", "soft tailoring"],
+    styleTags: ["elegant", "romantic", "artisan", "mediterranean"],
+    silhouetteTags: ["unstructured", "draped", "high-waisted"],
+    materialPrefer: ["high-twist wool", "linen", "cashmere", "silk blends"],
+    materialAvoid: ["heavy padding", "stiff canvas"],
+    formalityBias: "Business Formal",
+  },
+  {
+    key: "elevated_slouch",
+    terms: ["high-low", "creative casual", "modern evergreen", "slouchy chic"],
+    styleTags: ["eclectic", "minimalist", "textured", "modern"],
+    silhouetteTags: ["relaxed", "oversized", "fluid"],
+    materialPrefer: ["brushed cotton", "heavy jersey", "tweed", "knits"],
+    materialAvoid: ["rigid synthetics"],
+    formalityBias: "Elevated Casual",
+  },
+];
+
+const ICON_ALIAS_DICTIONARY: Array<{
+  iconKey: string;
+  terms: string[];
+  styleTags: string[];
+  silhouetteTags: string[];
+  materialPrefer: string[];
+  materialAvoid: string[];
+  formalityBias?: string | null;
+}> = [
+  {
+    iconKey: "albert_muzquiz",
+    terms: ["albert muzquiz", "muzquiz", "edgy albert"],
+    styleTags: ["vintage", "western", "americana", "workwear"],
+    silhouetteTags: ["high-waisted", "boxy", "straight-leg", "cropped"],
+    materialPrefer: ["heavy denim", "vintage cotton", "leather", "gabardine"],
+    materialAvoid: ["technical nylon", "slim-fit stretch fabrics"],
+    formalityBias: "Elevated Casual",
+  },
+  {
+    iconKey: "alessandro_squarzi",
+    terms: ["alessandro squarzi", "squarzi", "as65"],
+    styleTags: ["amekaji", "military", "vintage", "sartorial-casual"],
+    silhouetteTags: ["relaxed", "heritage", "rugged-tailoring"],
+    materialPrefer: ["selvedge denim", "vintage military canvas", "suede", "corduroy"],
+    materialAvoid: ["synthetic sportswear", "stiff business formal"],
+    formalityBias: "Elevated Casual",
+  },
+  {
+    iconKey: "derek_guy",
+    terms: ["derek guy", "dieworkwear", "menswear guy"],
+    styleTags: ["classic-menswear", "ivy", "tailoring", "soft-shoulder"],
+    silhouetteTags: ["full-cut", "drape", "high-rise", "proportionate"],
+    materialPrefer: ["tweed", "flannel", "oxford cloth", "linen"],
+    materialAvoid: ["skinny-fit", "low-rise trousers", "short jackets"],
+    formalityBias: "Business Casual",
+  },
+  {
+    iconKey: "aaron_levine",
+    terms: ["aaron levine", "levine"],
+    styleTags: ["elevated-slouch", "high-low", "textural", "grunge-luxe"],
+    silhouetteTags: ["oversized", "fluid", "relaxed", "layered"],
+    materialPrefer: ["brushed wool", "heavy knits", "washed silk", "distressed leather"],
+    materialAvoid: ["starched fabrics", "rigid tailoring"],
+    formalityBias: "Elevated Casual",
+  },
+  {
+    iconKey: "simon_crompton",
+    terms: ["simon crompton", "permanent style", "crompton"],
+    styleTags: ["sartorial", "luxury-minimalist", "bespoke", "craft-focused"],
+    silhouetteTags: ["tailored", "clean", "refined", "natural-shoulder"],
+    materialPrefer: ["cashmere", "vicuña", "high-twist wool", "bespoke shirting"],
+    materialAvoid: ["mass-market blends", "heavy branding", "distressed fabrics"],
+    formalityBias: "Business Formal",
+  },
+];
 
 const WEATHER_TOOL_INPUT_SCHEMA = z.object({
   locationQuery: z.string().min(1).describe("Location query string, e.g. 'Aviles, Asturias, Spain'."),
@@ -961,6 +1122,235 @@ async function fetchLlmClimateFallback(
 const findCanonicalOption = (options: string[], desired: string): string | null => {
   const found = options.find((item) => item.toLowerCase() === desired.toLowerCase());
   return found ?? null;
+};
+
+const normalizeDirectiveText = (value: string): string =>
+  normalize(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const directiveTextIncludesTerm = (text: string, term: string): boolean => {
+  const haystack = ` ${normalizeDirectiveText(text)} `;
+  const normalizedTerm = normalizeDirectiveText(term);
+  if (!normalizedTerm) return false;
+  return haystack.includes(` ${normalizedTerm} `);
+};
+
+const dedupeLowercase = (values: string[]): string[] => {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalizedValue = normalize(value);
+    if (!normalizedValue) continue;
+    const key = normalizedValue.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalizedValue);
+  }
+  return result;
+};
+
+const toCanonicalStyleDirectiveTags = (values: string[]): string[] =>
+  dedupeLowercase(
+    values
+      .map((value) => findCanonicalOption(STYLE_OPTIONS, value))
+      .filter((value): value is string => Boolean(value))
+  );
+
+const toCanonicalFormalityDirective = (value?: string | null): string | null => {
+  if (!value) return null;
+  return findCanonicalOption(FORMALITY_OPTIONS, value);
+};
+
+const extractUserIntentDirectives = ({
+  userPrompt,
+}: {
+  userPrompt: string;
+}): UserIntentDirectives => {
+  const styleDirectives: UserStyleDirective[] = [];
+  for (const entry of STYLE_ALIAS_DICTIONARY) {
+    const matchedTerms = entry.terms.filter((term) => directiveTextIncludesTerm(userPrompt, term));
+    if (matchedTerms.length === 0) continue;
+    styleDirectives.push({
+      key: entry.key,
+      sourceTerms: dedupeLowercase(matchedTerms),
+      canonicalStyleTags: toCanonicalStyleDirectiveTags(entry.styleTags),
+      silhouetteBiasTags: dedupeLowercase(entry.silhouetteTags),
+      materialBias: {
+        prefer: dedupeLowercase(entry.materialPrefer),
+        avoid: dedupeLowercase(entry.materialAvoid),
+      },
+      formalityBias: toCanonicalFormalityDirective(entry.formalityBias),
+      confidence: matchedTerms.length > 1 ? "high" : "medium",
+    });
+  }
+
+  const iconDirectives: UserIconDirective[] = [];
+  for (const entry of ICON_ALIAS_DICTIONARY) {
+    const matchedTerms = entry.terms.filter((term) => directiveTextIncludesTerm(userPrompt, term));
+    if (matchedTerms.length === 0) continue;
+    iconDirectives.push({
+      iconKey: entry.iconKey,
+      sourceTerms: dedupeLowercase(matchedTerms),
+      styleBiasTags: toCanonicalStyleDirectiveTags(entry.styleTags),
+      silhouetteBiasTags: dedupeLowercase(entry.silhouetteTags),
+      materialBias: {
+        prefer: dedupeLowercase(entry.materialPrefer),
+        avoid: dedupeLowercase(entry.materialAvoid),
+      },
+      formalityBias: toCanonicalFormalityDirective(entry.formalityBias),
+      confidence: matchedTerms.length > 1 ? "high" : "medium",
+    });
+  }
+
+  const styleTagsPrefer = dedupeLowercase([
+    ...styleDirectives.flatMap((directive) => directive.canonicalStyleTags),
+    ...iconDirectives.flatMap((directive) => directive.styleBiasTags),
+  ]);
+  const silhouetteTagsPrefer = dedupeLowercase([
+    ...styleDirectives.flatMap((directive) => directive.silhouetteBiasTags),
+    ...iconDirectives.flatMap((directive) => directive.silhouetteBiasTags),
+  ]);
+  const materialPrefer = dedupeLowercase([
+    ...styleDirectives.flatMap((directive) => directive.materialBias.prefer),
+    ...iconDirectives.flatMap((directive) => directive.materialBias.prefer),
+  ]);
+  const materialAvoid = dedupeLowercase([
+    ...styleDirectives.flatMap((directive) => directive.materialBias.avoid),
+    ...iconDirectives.flatMap((directive) => directive.materialBias.avoid),
+  ]);
+  const formalityBias = toCanonicalFormalityDirective(
+    styleDirectives.find((directive) => directive.formalityBias)?.formalityBias ??
+    iconDirectives.find((directive) => directive.formalityBias)?.formalityBias ??
+    null
+  );
+
+  return {
+    styleDirectives,
+    iconDirectives,
+    merged: {
+      styleTagsPrefer,
+      silhouetteTagsPrefer,
+      materialPrefer,
+      materialAvoid,
+      formalityBias,
+    },
+  };
+};
+
+const mergeDerivedProfileWithUserDirectives = ({
+  derivedProfile,
+  userDirectives,
+}: {
+  derivedProfile: DerivedProfile;
+  userDirectives: UserIntentDirectives;
+}): DerivedProfile => {
+  const directiveStyles = userDirectives.merged.styleTagsPrefer;
+  const mergedStyles = dedupeLowercase([...directiveStyles, ...derivedProfile.style]).slice(0, 4);
+
+  const preferSet = new Set(
+    dedupeLowercase([...derivedProfile.materialTargets.prefer, ...userDirectives.merged.materialPrefer]).map((value) =>
+      value.toLowerCase()
+    )
+  );
+  const avoidSet = new Set(
+    dedupeLowercase([...derivedProfile.materialTargets.avoid, ...userDirectives.merged.materialAvoid]).map((value) =>
+      value.toLowerCase()
+    )
+  );
+  for (const bucket of preferSet) {
+    avoidSet.delete(bucket);
+  }
+
+  return {
+    formality: derivedProfile.formality ?? userDirectives.merged.formalityBias,
+    style: mergedStyles.length > 0 ? mergedStyles : derivedProfile.style,
+    materialTargets: {
+      prefer: Array.from(preferSet),
+      avoid: Array.from(avoidSet),
+    },
+  };
+};
+
+type StyleDirectiveFit = {
+  score: number;
+  styleMatchCount: number;
+  totalGarments: number;
+  matchedStyleTags: string[];
+  requestedStyleTags: string[];
+  matchedIconKeys: string[];
+};
+
+const computeStyleDirectiveFit = ({
+  lineup,
+  userDirectives,
+}: {
+  lineup: Array<Pick<Garment, "style" | "formality" | "material_composition">>;
+  userDirectives?: UserIntentDirectives | null;
+}): StyleDirectiveFit => {
+  const requestedStyleTags = userDirectives?.merged.styleTagsPrefer ?? [];
+  if (!userDirectives || requestedStyleTags.length === 0 || lineup.length === 0) {
+    return {
+      score: 0,
+      styleMatchCount: 0,
+      totalGarments: lineup.length,
+      matchedStyleTags: [],
+      requestedStyleTags,
+      matchedIconKeys: userDirectives?.iconDirectives.map((directive) => directive.iconKey) ?? [],
+    };
+  }
+
+  const requestedSet = new Set(requestedStyleTags.map((tag) => tag.toLowerCase()));
+  let score = 0;
+  let styleMatchCount = 0;
+  const matchedStyleTags = new Set<string>();
+
+  for (const garment of lineup) {
+    const garmentStyle = normalize(garment.style).toLowerCase();
+    if (garmentStyle && requestedSet.has(garmentStyle)) {
+      styleMatchCount += 1;
+      score += 8;
+      matchedStyleTags.add(garmentStyle);
+    }
+
+    const materials = (garment.material_composition ?? []).map((entry) => normalize(entry.material).toLowerCase());
+    for (const preferredMaterial of userDirectives.merged.materialPrefer) {
+      const preferredLower = preferredMaterial.toLowerCase();
+      if (materials.some((material) => material.includes(preferredLower))) {
+        score += 2;
+      }
+    }
+    for (const avoidedMaterial of userDirectives.merged.materialAvoid) {
+      const avoidedLower = avoidedMaterial.toLowerCase();
+      if (materials.some((material) => material.includes(avoidedLower))) {
+        score -= 3;
+      }
+    }
+
+    if (
+      userDirectives.merged.formalityBias &&
+      normalize(garment.formality).toLowerCase() === userDirectives.merged.formalityBias.toLowerCase()
+    ) {
+      score += 1;
+    }
+  }
+
+  if (styleMatchCount === 0) {
+    score -= 10;
+  }
+
+  return {
+    score,
+    styleMatchCount,
+    totalGarments: lineup.length,
+    matchedStyleTags: Array.from(matchedStyleTags),
+    requestedStyleTags,
+    matchedIconKeys: userDirectives.iconDirectives.map((directive) => directive.iconKey),
+  };
 };
 
 const resolveTravelReasonIntent = (reason: "Vacation" | "Office" | "Customer visit"): TravelReasonIntent => {
@@ -1920,7 +2310,12 @@ const scoreGarmentForIntent = (
     "type" | "style" | "formality" | "features" | "material_composition" | "suitable_weather" | "suitable_occasions" | "suitable_places" | "suitable_time_of_day"
   >,
   intent: CanonicalIntent,
-  options?: { weatherContext?: string | null; weatherProfile?: WeatherProfile | null; derivedProfile?: DerivedProfile | null }
+  options?: {
+    weatherContext?: string | null;
+    weatherProfile?: WeatherProfile | null;
+    derivedProfile?: DerivedProfile | null;
+    userDirectives?: UserIntentDirectives | null;
+  }
 ): number => {
   const category = categorizeType(garment.type);
   const hardEvaluation = evaluateGarmentHardConstraints(garment, intent, {
@@ -1960,6 +2355,26 @@ const scoreGarmentForIntent = (
     derivedProfile: options?.derivedProfile,
   });
 
+  const directiveStyles = options?.userDirectives?.merged.styleTagsPrefer ?? [];
+  if (directiveStyles.length > 0) {
+    const styleSet = new Set(directiveStyles.map((style) => style.toLowerCase()));
+    const garmentStyle = normalize(garment.style).toLowerCase();
+    if (garmentStyle && styleSet.has(garmentStyle)) {
+      score += 8;
+    } else {
+      score -= 2;
+    }
+  }
+
+  if (options?.userDirectives?.merged.formalityBias) {
+    const expectedFormality = options.userDirectives.merged.formalityBias.toLowerCase();
+    if (normalize(garment.formality).toLowerCase() === expectedFormality) {
+      score += 3;
+    } else {
+      score -= 1;
+    }
+  }
+
   return score;
 };
 
@@ -1969,12 +2384,14 @@ const buildLineupRuleTrace = ({
   weatherContext,
   weatherProfile,
   derivedProfile,
+  userDirectives,
 }: {
   lineup: Array<Pick<Garment, "id" | "type" | "model" | "features" | "suitable_weather" | "suitable_occasions" | "suitable_places" | "suitable_time_of_day" | "formality" | "style" | "material_composition">>;
   intent: CanonicalIntent;
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
+  userDirectives?: UserIntentDirectives | null;
 }) =>
   lineup.map((garment) => {
     const category = categorizeType(garment.type);
@@ -2001,6 +2418,15 @@ const buildLineupRuleTrace = ({
       weatherProfile,
       derivedProfile,
     });
+    const directiveStyles = userDirectives?.merged.styleTagsPrefer ?? [];
+    const directiveStyleMatch =
+      directiveStyles.length === 0
+        ? null
+        : directiveStyles.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase());
+    const directiveFit = computeStyleDirectiveFit({
+      lineup: [garment],
+      userDirectives,
+    });
 
     return {
       garmentId: garment.id,
@@ -2021,6 +2447,8 @@ const buildLineupRuleTrace = ({
       styleMatch:
         intent.style.length === 0 ||
         intent.style.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase()),
+      directiveStyleMatch,
+      directiveStyleFitScore: directiveFit.score,
       materialScore,
     };
   });
@@ -2116,6 +2544,7 @@ const enforceCoreSilhouetteFromPool = ({
   weatherContext,
   weatherProfile,
   derivedProfile,
+  userDirectives,
   requiredCategories = CORE_SILHOUETTE_CATEGORIES,
 }: {
   ids: number[];
@@ -2130,6 +2559,7 @@ const enforceCoreSilhouetteFromPool = ({
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
+  userDirectives?: UserIntentDirectives | null;
   requiredCategories?: GarmentCategory[];
 }): number[] => {
   const blockedIdSet = new Set(blockedIds);
@@ -2147,11 +2577,13 @@ const enforceCoreSilhouetteFromPool = ({
       weatherContext,
       weatherProfile,
       derivedProfile,
+      userDirectives,
     }) + (usedGarmentIds.has(left.id) ? 0 : 25) + (left.favorite ? 5 : 0);
     const rightScore = scoreGarmentForIntent(right, intent, {
       weatherContext,
       weatherProfile,
       derivedProfile,
+      userDirectives,
     }) + (usedGarmentIds.has(right.id) ? 0 : 25) + (right.favorite ? 5 : 0);
     return rightScore - leftScore;
   };
@@ -2201,6 +2633,7 @@ const diversifyLineupFromPool = ({
   weatherContext,
   weatherProfile,
   derivedProfile,
+  userDirectives,
   requiredCategories = CORE_SILHOUETTE_CATEGORIES,
 }: {
   ids: number[];
@@ -2219,6 +2652,7 @@ const diversifyLineupFromPool = ({
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
+  userDirectives?: UserIntentDirectives | null;
   requiredCategories?: GarmentCategory[];
 }): number[] => {
   const historyIds = [
@@ -2287,11 +2721,13 @@ const diversifyLineupFromPool = ({
           weatherContext,
           weatherProfile,
           derivedProfile,
+          userDirectives,
         }) + (usedGarmentIds.has(left.id) ? 0 : 30) + (left.favorite ? 5 : 0);
         const rightScore = scoreGarmentForIntent(right, intent, {
           weatherContext,
           weatherProfile,
           derivedProfile,
+          userDirectives,
         }) + (usedGarmentIds.has(right.id) ? 0 : 30) + (right.favorite ? 5 : 0);
         return rightScore - leftScore;
       });
@@ -2322,6 +2758,7 @@ const normalizeToFixedCategoryLook = ({
   weatherContext,
   weatherProfile,
   derivedProfile,
+  userDirectives,
   requiredCategories,
   recentUsedIds,
   anchorGarmentId,
@@ -2335,6 +2772,7 @@ const normalizeToFixedCategoryLook = ({
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
+  userDirectives?: UserIntentDirectives | null;
   requiredCategories: GarmentCategory[];
   recentUsedIds?: Set<number>;
   anchorGarmentId?: number | null;
@@ -2362,6 +2800,7 @@ const normalizeToFixedCategoryLook = ({
     weatherContext,
     weatherProfile,
     derivedProfile,
+    userDirectives,
     requiredCategories,
   });
 
@@ -2416,6 +2855,7 @@ const normalizeToFixedCategoryLook = ({
             weatherContext,
             weatherProfile,
             derivedProfile,
+            userDirectives,
           }) +
           (garment.favorite ? 4 : 0) +
           providedBonus +
@@ -2466,7 +2906,12 @@ const destinationLooksBeachFriendly = (destination: string): boolean => {
 const computeObjectiveMatchScore = (
   lineup: Garment[],
   intent: CanonicalIntent,
-  options?: { weatherContext?: string | null; weatherProfile?: WeatherProfile | null; derivedProfile?: DerivedProfile | null }
+  options?: {
+    weatherContext?: string | null;
+    weatherProfile?: WeatherProfile | null;
+    derivedProfile?: DerivedProfile | null;
+    userDirectives?: UserIntentDirectives | null;
+  }
 ): number => {
   if (lineup.length === 0) return 0;
 
@@ -2504,6 +2949,15 @@ const computeObjectiveMatchScore = (
     dimensionScores.push(ratioScore(styleMatches));
   }
 
+  const styleDirectiveFit = computeStyleDirectiveFit({
+    lineup,
+    userDirectives: options?.userDirectives,
+  });
+  if ((options?.userDirectives?.merged.styleTagsPrefer.length ?? 0) > 0) {
+    const normalizedDirectiveScore = Math.max(0, Math.min(100, 50 + (styleDirectiveFit.score * 3)));
+    dimensionScores.push(normalizedDirectiveScore);
+  }
+
   const materialScores = lineup.map((garment) =>
     computeMaterialIntentScore({
       materialComposition: garment.material_composition,
@@ -2539,6 +2993,7 @@ const toValidatedSingleLookCandidate = ({
   weatherContext,
   weatherProfile,
   derivedProfile,
+  userDirectives,
   recentUsedIds,
   anchorGarmentId,
   anchorMode,
@@ -2553,6 +3008,7 @@ const toValidatedSingleLookCandidate = ({
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
+  userDirectives?: UserIntentDirectives | null;
   recentUsedIds?: Set<number>;
   anchorGarmentId?: number | null;
   anchorMode?: AnchorMode;
@@ -2571,6 +3027,7 @@ const toValidatedSingleLookCandidate = ({
     weatherContext,
     weatherProfile,
     derivedProfile,
+    userDirectives,
     requiredCategories: SINGLE_REQUIRED_CATEGORIES,
     recentUsedIds,
     anchorGarmentId,
@@ -2609,6 +3066,7 @@ const toValidatedSingleLookCandidate = ({
     weatherContext,
     weatherProfile,
     derivedProfile,
+    userDirectives,
   });
   const roundedModelConfidence = Math.max(0, Math.min(100, Math.round(modelConfidence)));
   const confidence = Math.max(
@@ -2639,6 +3097,7 @@ const buildDeterministicSingleLookFallbackCandidate = ({
   weatherContext,
   weatherProfile,
   derivedProfile,
+  userDirectives,
   recentUsedIds,
   avoidSignatures,
   anchorGarmentId,
@@ -2651,6 +3110,7 @@ const buildDeterministicSingleLookFallbackCandidate = ({
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
+  userDirectives?: UserIntentDirectives | null;
   recentUsedIds?: Set<number>;
   avoidSignatures?: Set<string>;
   anchorGarmentId?: number | null;
@@ -2672,6 +3132,7 @@ const buildDeterministicSingleLookFallbackCandidate = ({
             weatherContext,
             weatherProfile,
             derivedProfile,
+            userDirectives,
           }) +
           (garment.favorite ? 6 : 0) +
           (recentUsedIds?.has(garment.id) ? -14 : 8),
@@ -2692,6 +3153,7 @@ const buildDeterministicSingleLookFallbackCandidate = ({
     weatherContext,
     weatherProfile,
     derivedProfile,
+    userDirectives,
     recentUsedIds,
     anchorGarmentId,
     anchorMode,
@@ -2999,6 +3461,7 @@ const computeSingleLookRerankScore = ({
   weatherContext,
   weatherProfile,
   derivedProfile,
+  userDirectives,
   feedbackSignals,
 }: {
   candidate: SingleLookCandidate;
@@ -3007,9 +3470,16 @@ const computeSingleLookRerankScore = ({
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
+  userDirectives?: UserIntentDirectives | null;
   feedbackSignals?: SingleFeedbackSignals | null;
 }): number => {
   let score = candidate.confidence;
+
+  const styleDirectiveFit = computeStyleDirectiveFit({
+    lineup: candidate.lineupGarments,
+    userDirectives,
+  });
+  score += styleDirectiveFit.score;
 
   const matchingHistoryCount = history.filter((item) => item.signature === candidate.signature).length;
   if (matchingHistoryCount > 0) {
@@ -3100,6 +3570,7 @@ const chooseTopSingleLookCandidate = ({
   weatherContext,
   weatherProfile,
   derivedProfile,
+  userDirectives,
   feedbackSignals,
 }: {
   candidates: SingleLookCandidate[];
@@ -3108,6 +3579,7 @@ const chooseTopSingleLookCandidate = ({
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
+  userDirectives?: UserIntentDirectives | null;
   feedbackSignals?: SingleFeedbackSignals | null;
 }): SingleLookCandidate | null => {
   if (candidates.length === 0) return null;
@@ -3132,6 +3604,17 @@ const chooseTopSingleLookCandidate = ({
     }
   }
 
+  const hasDirectiveStyles = (userDirectives?.merged.styleTagsPrefer.length ?? 0) > 0;
+  if (hasDirectiveStyles) {
+    const directiveFitThreshold = 10;
+    const styleAlignedPool = pool.filter((candidate) =>
+      computeStyleDirectiveFit({ lineup: candidate.lineupGarments, userDirectives }).score >= directiveFitThreshold
+    );
+    if (styleAlignedPool.length > 0) {
+      pool = styleAlignedPool;
+    }
+  }
+
   const ranked = pool
     .map((candidate) => ({
       candidate,
@@ -3142,6 +3625,7 @@ const chooseTopSingleLookCandidate = ({
         weatherContext,
         weatherProfile,
         derivedProfile,
+        userDirectives,
         feedbackSignals,
       }),
     }))
@@ -4623,10 +5107,23 @@ export async function POST(request: Request) {
     });
     logInfo("[ai-look][single][step-1][canonical-context]", { ...canonicalContext });
 
-    const derivedProfile = buildDerivedProfileFromContext({
+    const userDirectives = extractUserIntentDirectives({
+      userPrompt,
+    });
+    logInfo("[ai-look][single][step-1][user-directives]", {
+      styleDirectives: userDirectives.styleDirectives,
+      iconDirectives: userDirectives.iconDirectives,
+      merged: userDirectives.merged,
+    });
+
+    const derivedProfileBase = buildDerivedProfileFromContext({
       context: canonicalContext,
       weatherContext: weatherContextSummary || null,
       weatherProfile: canonicalWeatherProfile,
+    });
+    const derivedProfile = mergeDerivedProfileWithUserDirectives({
+      derivedProfile: derivedProfileBase,
+      userDirectives,
     });
     const canonicalIntent = buildCanonicalIntentFromContext({
       context: canonicalContext,
@@ -4780,6 +5277,7 @@ export async function POST(request: Request) {
             `Canonical interpreted intent:\n${JSON.stringify(canonicalIntent)}`,
             `Structured weather profile (deterministic):\n${JSON.stringify(canonicalWeatherProfile)}`,
             `Derived profile (deterministic):\n${JSON.stringify(derivedProfile)}`,
+            `User style/icon directives (deterministic):\n${JSON.stringify(userDirectives)}`,
             weatherContextSummary || "No external weather context available.",
             `Return up to ${remaining} distinct candidates in this round.`,
             recentSignatureSet.size > 0
@@ -4800,6 +5298,9 @@ export async function POST(request: Request) {
             canonicalIntent.weather.length > 0
               ? `STRICT WEATHER RULE: Every selected garment must match at least one weather tag from ${JSON.stringify(canonicalIntent.weather)} (treat 'all season' as compatible).`
               : "No strict weather tags available.",
+            userDirectives.merged.styleTagsPrefer.length > 0
+              ? `STYLE DIRECTIVE RULE: Prioritize candidates aligned with requested style tags ${JSON.stringify(userDirectives.merged.styleTagsPrefer)} while preserving hard context constraints.`
+              : "No explicit user style directives detected.",
             `Wardrobe JSON:\n${JSON.stringify(compactWardrobe)}`,
           ].join("\n\n"),
         });
@@ -4821,6 +5322,7 @@ export async function POST(request: Request) {
             weatherContext: weatherContextSummary || null,
             weatherProfile: canonicalWeatherProfile,
             derivedProfile,
+            userDirectives,
             recentUsedIds,
             anchorGarmentId: effectiveAnchorGarmentId,
             anchorMode: effectiveAnchorMode,
@@ -4855,6 +5357,14 @@ export async function POST(request: Request) {
             continue;
           }
 
+          logInfo("[ai-look][single][step-2][style-fit]", {
+            signature: validated.signature,
+            fit: computeStyleDirectiveFit({
+              lineup: validated.lineupGarments,
+              userDirectives,
+            }),
+          });
+
           seenSignatures.add(validated.signature);
           collectedCandidates.push(validated);
           if (collectedCandidates.length >= SINGLE_LOOK_TARGET_CANDIDATES) break;
@@ -4880,6 +5390,31 @@ export async function POST(request: Request) {
       }
     );
 
+    const styleFitThreshold = 10;
+    const candidateStyleFits = collectedCandidates.map((candidate) => ({
+      signature: candidate.signature,
+      fit: computeStyleDirectiveFit({
+        lineup: candidate.lineupGarments,
+        userDirectives,
+      }),
+    }));
+    if (candidateStyleFits.length > 0) {
+      logInfo("[ai-look][single][step-2][style-fit-summary]", {
+        threshold: styleFitThreshold,
+        candidates: candidateStyleFits,
+      });
+    }
+    if (
+      (userDirectives.merged.styleTagsPrefer.length > 0) &&
+      candidateStyleFits.length > 0 &&
+      candidateStyleFits.every((entry) => entry.fit.score < styleFitThreshold)
+    ) {
+      logInfo("[ai-look][single][step-2][style-threshold-relaxed]", {
+        threshold: styleFitThreshold,
+        reason: "no-style-compatible-candidate-above-threshold",
+      });
+    }
+
     let selectedLook = chooseTopSingleLookCandidate({
       candidates: collectedCandidates,
       history: recentSingleHistory,
@@ -4887,6 +5422,7 @@ export async function POST(request: Request) {
       weatherContext: weatherContextSummary || null,
       weatherProfile: canonicalWeatherProfile,
       derivedProfile,
+      userDirectives,
       feedbackSignals: singleFeedbackSignals,
     });
 
@@ -4896,6 +5432,7 @@ export async function POST(request: Request) {
         weatherContext: weatherContextSummary || null,
         weatherProfile: canonicalWeatherProfile,
         derivedProfile,
+        userDirectives,
         recentUsedIds,
         avoidSignatures: recentSignatureSet,
         anchorGarmentId: effectiveAnchorGarmentId,
@@ -4950,16 +5487,23 @@ export async function POST(request: Request) {
           weatherContext: weatherContextSummary || null,
           weatherProfile: canonicalWeatherProfile,
           derivedProfile,
+          userDirectives,
           feedbackSignals: singleFeedbackSignals,
+        }),
+        styleDirectiveFit: computeStyleDirectiveFit({
+          lineup: selectedLook.lineupGarments,
+          userDirectives,
         }),
         weatherProfile: canonicalWeatherProfile,
         derivedProfile,
+        userDirectives,
         ruleTrace: buildLineupRuleTrace({
           lineup: selectedLook.lineupGarments,
           intent: canonicalIntent,
           weatherContext: weatherContextSummary || null,
           weatherProfile: canonicalWeatherProfile,
           derivedProfile,
+          userDirectives,
         }),
       }
     );
@@ -4997,6 +5541,11 @@ export async function POST(request: Request) {
         interpretedIntent: canonicalIntent,
         weatherProfile: canonicalWeatherProfile,
         derivedProfile,
+        userDirectives,
+        styleDirectiveFit: computeStyleDirectiveFit({
+          lineup: selectedLook.lineupGarments,
+          userDirectives,
+        }),
         weatherContext: weatherContextSummary || null,
         weatherContextStatus: weatherStatus,
       }
@@ -5023,6 +5572,11 @@ export async function POST(request: Request) {
       interpretedIntent: canonicalIntent,
       weatherProfile: canonicalWeatherProfile,
       derivedProfile,
+      userDirectives,
+      styleDirectiveFit: computeStyleDirectiveFit({
+        lineup: selectedLook.lineupGarments,
+        userDirectives,
+      }),
       weatherContext: weatherContextSummary || null,
       weatherContextStatus: weatherStatus,
     });
