@@ -7,10 +7,11 @@ import { openai } from "@ai-sdk/openai";
 import { generateObject, generateText, Output, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { NextResponse } from "next/server";
-import { isOwnerSession } from "@/lib/owner";
+import { getOwnerKey, isOwnerSession } from "@/lib/owner";
 import { getWardrobeData } from "@/lib/wardrobe";
 import { sql } from "@/lib/db";
 import type { Garment } from "@/lib/types";
+import { getUserProfileByOwnerKey } from "@/lib/user-profile";
 import schema from "@/public/schema.json";
 
 const singleLookRequestSchema = z.object({
@@ -336,8 +337,16 @@ const STYLE_ALIAS_DICTIONARY: Array<{
 }> = [
   {
     key: "vintage_americana",
-    terms: ["vintage americana", "heritage style", "mid-century casual"],
-    styleTags: ["vintage", "retro", "timeless", "authentic"],
+    terms: [
+      "vintage americana",
+      "heritage style",
+      "mid-century casual",
+      "heritage inspired",
+      "heritage-inspired",
+      "heritage touch",
+      "heritage touches",
+    ],
+    styleTags: ["vintage", "classic", "western", "workwear"],
     silhouetteTags: ["high-rise", "boxy", "straight"],
     materialPrefer: ["selvedge denim", "aged leather", "loopwheel cotton", "wool"],
     materialAvoid: ["polyester", "modern technical fabrics"],
@@ -354,12 +363,43 @@ const STYLE_ALIAS_DICTIONARY: Array<{
   },
   {
     key: "workwear",
-    terms: ["heritage workwear", "utilitarian", "rugged", "manual style"],
-    styleTags: ["functional", "industrial", "durable", "vintage"],
+    terms: [
+      "heritage workwear",
+      "utilitarian",
+      "rugged",
+      "manual style",
+      "workwear",
+      "utility style",
+      "military style",
+      "military inspired",
+      "military-inspired",
+      "field style",
+    ],
+    styleTags: ["workwear", "vintage", "outdoorsy", "classic"],
     silhouetteTags: ["boxy", "straight leg", "oversized"],
     materialPrefer: ["duck canvas", "heavy denim", "moleskin", "corduroy"],
     materialAvoid: ["silk", "fine gauge knits", "delicate blends"],
-    formalityBias: "Rugged Casual",
+    formalityBias: "Casual",
+  },
+  {
+    key: "military_heritage",
+    terms: [
+      "military",
+      "army style",
+      "army surplus",
+      "surplus style",
+      "fatigue pants",
+      "fatigue style",
+      "field jacket",
+      "heritage",
+      "heritage look",
+      "heritage vibe",
+    ],
+    styleTags: ["workwear", "vintage", "classic", "outdoorsy"],
+    silhouetteTags: ["structured", "relaxed", "straight", "heritage"],
+    materialPrefer: ["canvas", "cotton twill", "herringbone twill", "denim", "suede"],
+    materialAvoid: ["shiny synthetics", "high-shine finishes"],
+    formalityBias: "Elevated Casual",
   },
   {
     key: "ivy",
@@ -411,7 +451,7 @@ const ICON_ALIAS_DICTIONARY: Array<{
   {
     iconKey: "alessandro_squarzi",
     terms: ["alessandro squarzi", "squarzi", "as65"],
-    styleTags: ["amekaji", "military", "vintage", "sartorial-casual"],
+    styleTags: ["workwear", "vintage", "classic", "western"],
     silhouetteTags: ["relaxed", "heritage", "rugged-tailoring"],
     materialPrefer: ["selvedge denim", "vintage military canvas", "suede", "corduroy"],
     materialAvoid: ["synthetic sportswear", "stiff business formal"],
@@ -486,6 +526,8 @@ const stripWeatherStatusClaims = (value: string): string =>
     .replace(/\b(current\s+)?weather\s+(resolved|considered)[^.]*\.?/gi, "")
     .replace(/\bweather(?:\s+data)?[^.]*\b(unavailable|not\s+available|not\s+found|failed|could\s+not\s+be\s+(?:retrieved|resolved))\b[^.]*\.?/gi, "")
     .replace(/\bassuming[^.]*weather[^.]*\.?/gi, "")
+    .replace(/\bno\s+specific\s+(?:city|location|weather)[^.]*\.?/gi, "")
+    .replace(/\bif\s+you\s+want[^.]*\b(?:weather|forecast|city|colder|hotter)[^.]*\.?/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 
@@ -654,11 +696,25 @@ const extractLocationHintFromPrompt = (prompt: string): string | null => {
   const text = prompt.trim();
   if (!text) return null;
 
-  const inMatch = text.match(/\bin\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' .-]*(?:,\s*[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' .-]*){0,2})/i);
-  if (inMatch?.[1]) return inMatch[1].trim();
+  const isLikelyLocationHint = (value: string): boolean => {
+    const normalized = normalize(value).replace(/\s+/g, " ");
+    if (!normalized) return false;
+
+    const lower = normalized.toLowerCase();
+    if (/^(a|an|the)\s+/.test(lower)) return false;
+    if (/\b(we|i|later|then|because|while|after)\b/.test(lower)) return false;
+    if (!lower.includes(",") && lower.split(" ").length > 6) return false;
+
+    return true;
+  };
+
+  const inMatch = text.match(
+    /\bin\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' .-]{0,80}?)(?=(?:\s+(?:and|but|then|later|because|while|after)\b|[.!?]|$))/i
+  );
+  if (inMatch?.[1] && isLikelyLocationHint(inMatch[1])) return inMatch[1].trim();
 
   const commaMatch = text.match(/([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' .-]+,\s*[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' .-]+)/);
-  if (commaMatch?.[1]) return commaMatch[1].trim();
+  if (commaMatch?.[1] && isLikelyLocationHint(commaMatch[1])) return commaMatch[1].trim();
 
   return null;
 };
@@ -4281,7 +4337,7 @@ export async function POST(request: Request) {
       return responseJson({ error: "Invalid AI look payload." }, { status: 400 });
     }
 
-    const ownerRateLimitKey = `owner:${process.env.EDITOR_OWNER_EMAIL?.toLowerCase() || "owner"}`;
+    const ownerRateLimitKey = getOwnerKey();
     if (await isRateLimited(ownerRateLimitKey)) {
       logWarn("[ai-look][request][rate-limited]", { ownerRateLimitKey });
       return responseJson(
@@ -5692,8 +5748,26 @@ export async function POST(request: Request) {
     let weatherContextSource: WeatherContextSource = weatherContextSummary ? "model_tool" : "none";
     let temporalWeatherStatus: SingleTemporalWeatherStatus | null = null;
 
-    // Fallback: if first pass skipped tool call, force one when a location hint exists.
-    const locationHint = extractLocationHintFromPrompt(userPrompt);
+    let profileDefaultLocation: string | null = null;
+    try {
+      const userProfile = await getUserProfileByOwnerKey(ownerRateLimitKey);
+      profileDefaultLocation = userProfile?.defaultLocation ?? null;
+    } catch (error) {
+      logWarn("[ai-look][single][profile][load-failed]", {
+        ownerKey: ownerRateLimitKey,
+        error: toErrorDetails(error),
+      });
+    }
+
+    const promptLocationHint = extractLocationHintFromPrompt(userPrompt);
+    const locationHint = promptLocationHint || profileDefaultLocation || null;
+    const resolvedLocationSource = promptLocationHint
+      ? "prompt"
+      : profileDefaultLocation
+        ? "profile"
+        : "none";
+
+    // Fallback: if first pass skipped tool call, force one when a resolved location exists.
     const temporalTarget = resolveSingleTemporalTargetFromPrompt(userPrompt, new Date());
     if (locationHint) {
       weatherStatus = "location_detected";
@@ -5707,6 +5781,7 @@ export async function POST(request: Request) {
         trigger: temporalTarget.trigger,
         resolvedBy: temporalTarget.resolvedBy,
         locationHint: locationHint || null,
+        resolvedLocationSource,
       }
     );
 
@@ -5838,6 +5913,7 @@ export async function POST(request: Request) {
         temporalTargetDate: temporalTarget.targetDate,
         temporalTargetRange: temporalTarget.targetRange,
         temporalWeatherStatus,
+        resolvedLocationSource,
         resolvedWeatherTags,
         weatherProfile: resolvedWeatherProfile,
       }

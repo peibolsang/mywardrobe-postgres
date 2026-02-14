@@ -56,27 +56,29 @@ Use imperative commit subjects.
 3. From garment detail (`/garments/[id]`), use the `Edit` action card to open owner-only edit mode for that specific garment (`/editor?garmentId=<id>`); after saving changes, the user is redirected back to the same garment detail read-only view and shown a success toast.
 4. Add new garments via `/add-garment` (owner-only), including image upload.
 5. View distribution analytics in `/stats`.
-6. Generate AI recommendations via `/ai-look` (owner-only): either a single free-text look or a multi-day "Pack for Travel" plan (destination + date range + reason).
+6. Configure profile defaults in `/profile` (owner-only), including `Default Location` used by AI Look weather fallback.
+7. Generate AI recommendations via `/ai-look` (owner-only): either a single free-text look or a multi-day "Pack for Travel" plan (destination + date range + reason).
    - From garment details (owner view), `Cmd/Ctrl+K` opens garment actions including `Generate look around this garment`, which routes to `/ai-look?anchorGarmentId=<id>&anchorMode=strict`.
-7. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
+8. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
 
 ## Rendering strategy
 1. Server components (`app/(main)/*`) handle initial auth checks and data loading.
 2. Client components (`components/client/*` and interactive feature components) manage filters, dialogs, local form state, toasts, and URL state.
 3. Server actions (`actions/garment.ts`) own write operations, authorization checks, redirects, and cache invalidation.
 4. Editor pages (`/editor`, `/add-garment`) preload wardrobe/schema/editor-options server-side and render `EditorForm` inside `Suspense` with a layout-matching skeleton fallback to avoid empty-state flash and layout shift.
-5. AI look page (`/ai-look`) is route-guarded server-side and renders a client UI with two tabs: (a) free-text single-look generation and (b) "Pack for Travel" planning.
-6. `/api/ai-look` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
-7. Single-look mode uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) multi-candidate look generation constrained to wardrobe IDs, followed by server-side validation, normalization, reranking, and one final look selection.
+5. Profile page (`/profile`) is route-guarded server-side (owner-only), hydrates owner profile defaults, and persists updates via `/api/profile`.
+6. AI look page (`/ai-look`) is route-guarded server-side and renders a client UI with two tabs: (a) free-text single-look generation and (b) "Pack for Travel" planning.
+7. `/api/ai-look` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
+8. Single-look mode uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) multi-candidate look generation constrained to wardrobe IDs, followed by server-side validation, normalization, reranking, and one final look selection.
    - Step 1 is context-first (`weather`, `occasion`, `place`, `timeOfDay`, `notes`); server deterministically derives `formality`, `style`, and material targets from context + structured weather profile before Step 2.
    - Step 2 receives deterministic `weatherProfile` + `derivedProfile` scaffolding; final selection enforces category-aware hard constraints with explicit priority (`weather > occasion/place > time > style`).
-8. Travel mode geocodes destination and enriches each trip day with forecast weather when available; if exact day forecast is unavailable, it falls back to LLM-estimated monthly climate for the destination, then to deterministic seasonal inference only if the LLM fallback fails.
-9. Travel generation follows a two-step pattern per day: (a) interpret structured day context into canonical intent, then (b) generate one wardrobe-only look using a scored candidate subset of eligible garments (category quotas + novelty weighting) plus strict day constraints.
-10. AI Look UI captures recommendation feedback (thumbs up/down + optional reason) and persists it via owner-only API for rule tuning.
+9. Travel mode geocodes destination and enriches each trip day with forecast weather when available; if exact day forecast is unavailable, it falls back to LLM-estimated monthly climate for the destination, then to deterministic seasonal inference only if the LLM fallback fails.
+10. Travel generation follows a two-step pattern per day: (a) interpret structured day context into canonical intent, then (b) generate one wardrobe-only look using a scored candidate subset of eligible garments (category quotas + novelty weighting) plus strict day constraints.
+11. AI Look UI captures recommendation feedback (thumbs up/down + optional reason) and persists it via owner-only API for rule tuning.
 
 ## AI Look Agent (Mode Summary)
 1. Single-look interpretation: `/api/ai-look` maps free-text input into canonical wardrobe intent (`weather`, `occasion`, `place`, `timeOfDay`, `formality`, `style`) via structured output; the model can tool-call `getWeatherByLocation` for live weather context.
-   - Single-look weather is resolved as current conditions for the indicated place; prompt date parsing is intentionally not used in single-look mode.
+   - Single-look weather location resolution priority is `prompt location > profile default location > no-location fallback`; prompt date parsing is intentionally not used in single-look mode.
 2. Single-look recommendation: Step 2 attempts up to six candidates and degrades gracefully when fewer valid candidates are returned. Candidates are wardrobe-ID-only, validated against DB IDs, normalized to exactly four pieces (`outerwear + top + bottom + footwear`), deduplicated by signature, and reranked with objective fit + model confidence + recency/overlap controls.
    - Single mode computes a structured deterministic weather profile (`tempBand`, `precipitation`, `wind`, `humidity`, `wetSurfaceRisk`, `confidence`) and a deterministic derived profile (`formality`, `style`, material targets).
    - Category-aware deterministic hard rules enforce weather and occasion/place compatibility per garment; wet-surface/material conflicts (especially outerwear/footwear) are hard-blocked.
@@ -102,13 +104,14 @@ Use imperative commit subjects.
 - `EDITOR_OWNER_EMAIL` is the single source of truth for editor authorization.
 - Route-level protection:
   - `/garments/[id]` (full detail and intercept modal) requires authenticated session; unauthenticated users are redirected to `/login`.
-  - `/editor`, `/add-garment`, and `/ai-look` require authenticated owner session, otherwise redirect (`/login`) or `notFound()`.
+  - `/editor`, `/add-garment`, `/ai-look`, and `/profile` require authenticated owner session, otherwise redirect (`/login`) or `notFound()`.
   - `/editor` accepts optional query param `garmentId` to initialize the editor on a specific garment.
   - Garment details (`/garments/[id]`) only render the `Edit` action card in UI for owner sessions.
 - Middleware-level protection:
-  - `app/middleware.ts` applies auth gate on `/garments/*` (session required) and owner gate on `/editor/*` + `/ai-look/*` for defense-in-depth.
+  - `app/middleware.ts` applies auth gate on `/garments/*` (session required) and owner gate on `/editor/*` + `/ai-look/*` + `/profile/*` for defense-in-depth.
 - API-level protection:
   - `/api/wardrobe`, `/api/editor-options`, `/api/upload`, and `/api/ai-look` require authenticated owner session (`403` on failure).
+  - `/api/profile` requires authenticated owner session (`403` on failure).
   - `/api/ai-look/feedback` also requires authenticated owner session (`403` on failure).
 - Mutation-level protection:
   - `createGarment`, `updateGarment`, and `deleteGarment` enforce owner checks server-side regardless of UI access.
@@ -248,6 +251,12 @@ Most likely with a **composite primary key** on `(garment_id, *_id)`.
   * `suitable_times_of_day`
   * `suitable_places`
   * `suitable_occasions`
+
+### Profile Table
+
+* `user_profile`
+  * owner-scoped defaults (`owner_key`, `default_location`, `created_at`, `updated_at`)
+  * provisioned via explicit SQL migration script `scripts/sql/create-user-profile.sql`
 
 ### AI Memory Tables
 

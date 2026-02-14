@@ -3,8 +3,11 @@ import "server-only";
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { isOwnerSession } from "@/lib/owner";
+import { getOwnerKey, isOwnerSession } from "@/lib/owner";
 import { sql } from "@/lib/db";
+
+const FEEDBACK_MAX_STYLE_TAGS = 8;
+const FEEDBACK_MAX_MATERIAL_TARGETS = 24;
 
 const weatherProfileSchema = z.object({
   tempBand: z.enum(["cold", "cool", "mild", "warm", "hot"]),
@@ -18,10 +21,10 @@ const weatherProfileSchema = z.object({
 
 const derivedProfileSchema = z.object({
   formality: z.string().nullable(),
-  style: z.array(z.string()).max(4),
+  style: z.array(z.string()).max(FEEDBACK_MAX_STYLE_TAGS),
   materialTargets: z.object({
-    prefer: z.array(z.string()).max(8),
-    avoid: z.array(z.string()).max(8),
+    prefer: z.array(z.string()).max(FEEDBACK_MAX_MATERIAL_TARGETS),
+    avoid: z.array(z.string()).max(FEEDBACK_MAX_MATERIAL_TARGETS),
   }).strict(),
 }).strict();
 
@@ -37,6 +40,8 @@ const feedbackRequestSchema = z.object({
 }).strict();
 
 const normalize = (value: unknown): string => String(value ?? "").trim();
+const normalizeStringList = (values: string[], max: number): string[] =>
+  Array.from(new Set(values.map((value) => normalize(value)).filter(Boolean))).slice(0, max);
 
 const isAllowedOrigin = (request: Request): boolean => {
   const origin = request.headers.get("origin");
@@ -97,9 +102,25 @@ export async function POST(request: Request) {
       derivedProfile,
     } = parsed.data;
 
-    const ownerKey = `owner:${process.env.EDITOR_OWNER_EMAIL?.toLowerCase() || "owner"}`;
+    const ownerKey = getOwnerKey();
     const normalizedReason = normalize(reasonText);
     const persistedReason = normalizedReason.length > 0 ? normalizedReason : null;
+    const normalizedDerivedProfile = derivedProfile
+      ? {
+          formality: normalize(derivedProfile.formality) || null,
+          style: normalizeStringList(derivedProfile.style, FEEDBACK_MAX_STYLE_TAGS),
+          materialTargets: {
+            prefer: normalizeStringList(
+              derivedProfile.materialTargets.prefer,
+              FEEDBACK_MAX_MATERIAL_TARGETS
+            ),
+            avoid: normalizeStringList(
+              derivedProfile.materialTargets.avoid,
+              FEEDBACK_MAX_MATERIAL_TARGETS
+            ),
+          },
+        }
+      : undefined;
 
     await sql`
       INSERT INTO ai_look_feedback (
@@ -122,7 +143,7 @@ export async function POST(request: Request) {
         ${vote},
         ${persistedReason},
         ${JSON.stringify(weatherProfile ?? {})},
-        ${JSON.stringify(derivedProfile ?? {})}
+        ${JSON.stringify(normalizedDerivedProfile ?? {})}
       );
     `;
 
