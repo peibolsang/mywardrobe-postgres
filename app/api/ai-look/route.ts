@@ -11,6 +11,7 @@ import { getOwnerKey, isOwnerSession } from "@/lib/owner";
 import { getWardrobeData } from "@/lib/wardrobe";
 import { sql } from "@/lib/db";
 import type { Garment } from "@/lib/types";
+import { getActiveStyleDirectiveCatalog, type StyleDirectiveCatalogEntry } from "@/lib/profile-styles";
 import { getUserProfileByOwnerKey } from "@/lib/user-profile";
 import schema from "@/public/schema.json";
 
@@ -351,110 +352,6 @@ const SINGLE_LOOK_TARGET_CANDIDATES = 6;
 const SINGLE_LOOK_MAX_GENERATION_ATTEMPTS = 2;
 const SINGLE_RECENT_HISTORY_LIMIT = 18;
 const TRAVEL_HISTORY_ROW_LIMIT = 240;
-
-const STYLE_ALIAS_DICTIONARY: Array<{
-  key: string;
-  terms: string[];
-  styleTags: string[];
-  silhouetteTags: string[];
-  materialPrefer: string[];
-  materialAvoid: string[];
-  formalityBias?: string | null;
-}> = [
-  {
-    key: "vintage_americana",
-    terms: [
-      "vintage americana",
-      "heritage style",
-      "mid-century casual",
-      "heritage inspired",
-      "heritage-inspired",
-      "heritage touch",
-      "heritage touches",
-    ],
-    styleTags: ["vintage", "classic", "western", "workwear"],
-    silhouetteTags: ["high-rise", "boxy", "straight"],
-    materialPrefer: ["selvedge denim", "aged leather", "loopwheel cotton", "wool"],
-    materialAvoid: ["polyester", "modern technical fabrics"],
-    formalityBias: "Elevated Casual",
-  },
-  {
-    key: "amekaji",
-    terms: ["amekaji", "american casual", "japanese americana"],
-    styleTags: ["vintage", "workwear", "western", "classic"],
-    silhouetteTags: ["heritage", "rugged"],
-    materialPrefer: ["denim", "canvas", "twill", "leather", "flannel"],
-    materialAvoid: [],
-    formalityBias: "Elevated Casual",
-  },
-  {
-    key: "workwear",
-    terms: [
-      "heritage workwear",
-      "utilitarian",
-      "rugged",
-      "manual style",
-      "workwear",
-      "utility style",
-      "military style",
-      "military inspired",
-      "military-inspired",
-      "field style",
-    ],
-    styleTags: ["workwear", "vintage", "outdoorsy", "classic"],
-    silhouetteTags: ["boxy", "straight leg", "oversized"],
-    materialPrefer: ["duck canvas", "heavy denim", "moleskin", "corduroy"],
-    materialAvoid: ["silk", "fine gauge knits", "delicate blends"],
-    formalityBias: "Casual",
-  },
-  {
-    key: "military_heritage",
-    terms: [
-      "military",
-      "army style",
-      "army surplus",
-      "surplus style",
-      "fatigue pants",
-      "fatigue style",
-      "field jacket",
-      "heritage",
-      "heritage look",
-      "heritage vibe",
-    ],
-    styleTags: ["workwear", "vintage", "classic", "outdoorsy"],
-    silhouetteTags: ["structured", "relaxed", "straight", "heritage"],
-    materialPrefer: ["canvas", "cotton twill", "herringbone twill", "denim", "suede"],
-    materialAvoid: ["shiny synthetics", "high-shine finishes"],
-    formalityBias: "Elevated Casual",
-  },
-  {
-    key: "ivy",
-    terms: ["ivy league", "trad", "soft prep", "collegiate"],
-    styleTags: ["academic", "classic", "preppy", "conservative"],
-    silhouetteTags: ["natural shoulder", "tapered", "tailored"],
-    materialPrefer: ["oxford cloth", "shetland wool", "cotton twill", "seersucker"],
-    materialAvoid: ["technical fabrics", "synthetic blends"],
-    formalityBias: "Business Casual",
-  },
-  {
-    key: "soft_tailoring",
-    terms: ["neapolitan", "florentine", "sartorial casual", "soft tailoring"],
-    styleTags: ["elegant", "romantic", "artisan", "mediterranean"],
-    silhouetteTags: ["unstructured", "draped", "high-waisted"],
-    materialPrefer: ["high-twist wool", "linen", "cashmere", "silk blends"],
-    materialAvoid: ["heavy padding", "stiff canvas"],
-    formalityBias: "Business Formal",
-  },
-  {
-    key: "elevated_slouch",
-    terms: ["high-low", "creative casual", "modern evergreen", "slouchy chic"],
-    styleTags: ["eclectic", "minimalist", "textured", "modern"],
-    silhouetteTags: ["relaxed", "oversized", "fluid"],
-    materialPrefer: ["brushed cotton", "heavy jersey", "tweed", "knits"],
-    materialAvoid: ["rigid synthetics"],
-    formalityBias: "Elevated Casual",
-  },
-];
 
 const REFERENCE_ALIAS_DICTIONARY: Array<{
   referenceKey: string;
@@ -1665,7 +1562,7 @@ const buildStyleDirectiveFromEntry = ({
   sourceTerms,
   confidence,
 }: {
-  entry: (typeof STYLE_ALIAS_DICTIONARY)[number];
+  entry: StyleDirectiveCatalogEntry;
   sourceTerms: string[];
   confidence: DirectiveConfidence;
 }): UserStyleDirective => ({
@@ -1722,9 +1619,11 @@ const dedupeSelectedTools = (selectedTools: SingleSelectedTool[] | undefined): N
 
 const extractUserIntentDirectives = ({
   userPrompt,
+  styleCatalog,
   selectedTools,
 }: {
   userPrompt: string;
+  styleCatalog: StyleDirectiveCatalogEntry[];
   selectedTools?: SingleSelectedTool[];
 }): UserIntentDirectives => {
   const dedupedSelectedTools = dedupeSelectedTools(selectedTools);
@@ -1734,7 +1633,7 @@ const extractUserIntentDirectives = ({
 
   for (const selectedTool of dedupedSelectedTools) {
     if (selectedTool.type === "style") {
-      const styleEntry = STYLE_ALIAS_DICTIONARY.find(
+      const styleEntry = styleCatalog.find(
         (entry) => normalizeDirectiveText(entry.key) === normalizeDirectiveText(selectedTool.id)
       );
       if (styleEntry) {
@@ -1790,7 +1689,7 @@ const extractUserIntentDirectives = ({
   }
 
   const freeTextStyleDirectives: UserStyleDirective[] = [];
-  for (const entry of STYLE_ALIAS_DICTIONARY) {
+  for (const entry of styleCatalog) {
     const matchedTerms = entry.terms.filter((term) => directiveTextIncludesTerm(userPrompt, term));
     if (matchedTerms.length === 0) continue;
     freeTextStyleDirectives.push(
@@ -1902,6 +1801,10 @@ type StyleDirectiveFit = {
   totalGarments: number;
   matchedStyleTags: string[];
   requestedStyleTags: string[];
+  matchedUniqueStyleTagCount: number;
+  missingStyleTags: string[];
+  styleCoverageRatio: number;
+  styleTagHitCounts: Record<string, number>;
   matchedReferenceKeys: string[];
 };
 
@@ -1920,21 +1823,27 @@ const computeStyleDirectiveFit = ({
       totalGarments: lineup.length,
       matchedStyleTags: [],
       requestedStyleTags,
+      matchedUniqueStyleTagCount: 0,
+      missingStyleTags: requestedStyleTags,
+      styleCoverageRatio: 0,
+      styleTagHitCounts: {},
       matchedReferenceKeys: userDirectives?.referenceDirectives.map((directive) => directive.referenceKey) ?? [],
     };
   }
 
-  const requestedSet = new Set(requestedStyleTags.map((tag) => tag.toLowerCase()));
+  const requestedStyleTagsNormalized = dedupeLowercase(requestedStyleTags);
+  const requestedSet = new Set(requestedStyleTagsNormalized.map((tag) => tag.toLowerCase()));
   let score = 0;
   let styleMatchCount = 0;
-  const matchedStyleTags = new Set<string>();
+  const styleTagHitCounts = new Map<string, number>();
 
   for (const garment of lineup) {
     const garmentStyle = normalize(garment.style).toLowerCase();
     if (garmentStyle && requestedSet.has(garmentStyle)) {
       styleMatchCount += 1;
-      score += 8;
-      matchedStyleTags.add(garmentStyle);
+      // Reward per-garment adherence, but put more emphasis on unique requested-tag coverage below.
+      score += 5;
+      styleTagHitCounts.set(garmentStyle, (styleTagHitCounts.get(garmentStyle) ?? 0) + 1);
     }
 
     const materials = (garment.material_composition ?? []).map((entry) => normalize(entry.material).toLowerCase());
@@ -1959,16 +1868,36 @@ const computeStyleDirectiveFit = ({
     }
   }
 
+  const matchedStyleTags = Array.from(styleTagHitCounts.keys());
+  const missingStyleTags = requestedStyleTagsNormalized
+    .map((tag) => tag.toLowerCase())
+    .filter((tag) => !styleTagHitCounts.has(tag));
+  const matchedUniqueStyleTagCount = matchedStyleTags.length;
+  const styleCoverageRatio = requestedStyleTagsNormalized.length > 0
+    ? matchedUniqueStyleTagCount / requestedStyleTagsNormalized.length
+    : 0;
+  const styleCoverageBonus = Math.round(styleCoverageRatio * 16);
+  score += matchedUniqueStyleTagCount * 6;
+  score += styleCoverageBonus;
+  score -= missingStyleTags.length * 5;
+
   if (styleMatchCount === 0) {
-    score -= 10;
+    score -= 12;
+  }
+  if (matchedUniqueStyleTagCount === 0) {
+    score -= 8;
   }
 
   return {
     score,
     styleMatchCount,
     totalGarments: lineup.length,
-    matchedStyleTags: Array.from(matchedStyleTags),
-    requestedStyleTags,
+    matchedStyleTags,
+    requestedStyleTags: requestedStyleTagsNormalized,
+    matchedUniqueStyleTagCount,
+    missingStyleTags,
+    styleCoverageRatio,
+    styleTagHitCounts: Object.fromEntries(styleTagHitCounts.entries()),
     matchedReferenceKeys: userDirectives.referenceDirectives.map((directive) => directive.referenceKey),
   };
 };
@@ -3831,6 +3760,13 @@ type SingleFeedbackSignals = {
   formalityMismatchSignal: boolean;
   styleMismatchSignal: boolean;
   timeMismatchSignal: boolean;
+  evidenceCounts: {
+    rain: number;
+    material: number;
+    formality: number;
+    style: number;
+    time: number;
+  };
 };
 
 const parseHistoryIds = (raw: string): number[] => {
@@ -3845,45 +3781,67 @@ const parseHistoryIds = (raw: string): number[] => {
   }
 };
 
+const FEEDBACK_NEGATIVE_CUE_REGEX =
+  /\b(too|not|isn't|isnt|doesn't|doesnt|didn't|didnt|mismatch|wrong|off|lack|lacking|missing|avoid|conflict|issue|problem|inappropriate|bad|poor)\b/;
+const FEEDBACK_RAIN_REGEX =
+  /\b(rain|rainy|wet|waterproof|water-resistant|water resistant|drizzle|soaked|umbrella|puddle|slippery)\b/;
+const FEEDBACK_MATERIAL_REGEX =
+  /\b(material|materials|fabric|textile|tweed|canvas|absorbent|technical|synthetic|polyester|nylon|wool|cotton|linen|denim|suede|leather)\b/;
+const FEEDBACK_FORMALITY_REGEX =
+  /\b(formality|too formal|too casual|dressy|underdressed|overdressed|formal|casual)\b/;
+const FEEDBACK_STYLE_REGEX =
+  /\b(style|vibe|aesthetic|silhouette|fit|theme|look|minimalist|classic|sporty|workwear|vintage|western|outdoorsy)\b/;
+const FEEDBACK_TIME_REGEX =
+  /\b(time|timing|all day|morning|afternoon|evening|night|daytime)\b/;
+
+const hasMismatchSignal = ({
+  reason,
+  categoryRegex,
+  allowCategoryOnly = false,
+}: {
+  reason: string;
+  categoryRegex: RegExp;
+  allowCategoryOnly?: boolean;
+}): boolean => {
+  if (!reason || !categoryRegex.test(reason)) return false;
+  if (allowCategoryOnly) return true;
+  return FEEDBACK_NEGATIVE_CUE_REGEX.test(reason);
+};
+
 const buildSingleFeedbackSignals = (rows: SingleFeedbackSignalRow[]): SingleFeedbackSignals => {
   const penalizedSignatures = new Set(rows.map((row) => row.signature).filter(Boolean));
   const penalizedGarmentIds = new Set(rows.flatMap((row) => row.ids));
 
-  let rainMismatchSignal = false;
-  let materialMismatchSignal = false;
-  let formalityMismatchSignal = false;
-  let styleMismatchSignal = false;
-  let timeMismatchSignal = false;
+  let rainEvidenceCount = 0;
+  let materialEvidenceCount = 0;
+  let formalityEvidenceCount = 0;
+  let styleEvidenceCount = 0;
+  let timeEvidenceCount = 0;
 
   for (const row of rows) {
     const reason = row.reason.toLowerCase();
-    if (
-      /\b(rain|rainy|wet|waterproof|water-resistant|water resistant|drizzle|soaked|umbrella)\b/.test(reason)
-    ) {
-      rainMismatchSignal = true;
-    }
-    if (/\b(material|fabric|textile|tweed|canvas|absorbent|technical)\b/.test(reason)) {
-      materialMismatchSignal = true;
-    }
-    if (/\b(formality|too formal|too casual|dressy|underdressed|overdressed)\b/.test(reason)) {
-      formalityMismatchSignal = true;
-    }
-    if (/\b(style|vibe|minimalist|classic|sporty|workwear)\b/.test(reason)) {
-      styleMismatchSignal = true;
-    }
-    if (/\b(time|all day|morning|afternoon|evening|night)\b/.test(reason)) {
-      timeMismatchSignal = true;
-    }
+    if (hasMismatchSignal({ reason, categoryRegex: FEEDBACK_RAIN_REGEX, allowCategoryOnly: true })) rainEvidenceCount += 1;
+    if (hasMismatchSignal({ reason, categoryRegex: FEEDBACK_MATERIAL_REGEX })) materialEvidenceCount += 1;
+    if (hasMismatchSignal({ reason, categoryRegex: FEEDBACK_FORMALITY_REGEX })) formalityEvidenceCount += 1;
+    if (hasMismatchSignal({ reason, categoryRegex: FEEDBACK_STYLE_REGEX })) styleEvidenceCount += 1;
+    if (hasMismatchSignal({ reason, categoryRegex: FEEDBACK_TIME_REGEX })) timeEvidenceCount += 1;
   }
 
   return {
     penalizedSignatures,
     penalizedGarmentIds,
-    rainMismatchSignal,
-    materialMismatchSignal,
-    formalityMismatchSignal,
-    styleMismatchSignal,
-    timeMismatchSignal,
+    rainMismatchSignal: rainEvidenceCount > 0,
+    materialMismatchSignal: materialEvidenceCount > 0,
+    formalityMismatchSignal: formalityEvidenceCount > 0,
+    styleMismatchSignal: styleEvidenceCount > 0,
+    timeMismatchSignal: timeEvidenceCount > 0,
+    evidenceCounts: {
+      rain: rainEvidenceCount,
+      material: materialEvidenceCount,
+      formality: formalityEvidenceCount,
+      style: styleEvidenceCount,
+      time: timeEvidenceCount,
+    },
   };
 };
 
@@ -4258,11 +4216,21 @@ const chooseTopSingleLookCandidate = ({
   const hasDirectiveStyles = (userDirectives?.merged.styleTagsPrefer.length ?? 0) > 0;
   if (hasDirectiveStyles) {
     const directiveFitThreshold = 10;
-    const styleAlignedPool = pool.filter((candidate) =>
-      computeStyleDirectiveFit({ lineup: candidate.lineupGarments, userDirectives }).score >= directiveFitThreshold
-    );
-    if (styleAlignedPool.length > 0) {
-      pool = styleAlignedPool;
+    const requestedStyleCount = userDirectives?.merged.styleTagsPrefer.length ?? 0;
+    const minUniqueStyleCoverage = Math.min(2, requestedStyleCount);
+    const primaryStyleAlignedPool = pool.filter((candidate) => {
+      const fit = computeStyleDirectiveFit({ lineup: candidate.lineupGarments, userDirectives });
+      return fit.score >= directiveFitThreshold && fit.matchedUniqueStyleTagCount >= minUniqueStyleCoverage;
+    });
+    if (primaryStyleAlignedPool.length > 0) {
+      pool = primaryStyleAlignedPool;
+    } else {
+      const fallbackStyleAlignedPool = pool.filter((candidate) =>
+        computeStyleDirectiveFit({ lineup: candidate.lineupGarments, userDirectives }).score >= directiveFitThreshold
+      );
+      if (fallbackStyleAlignedPool.length > 0) {
+        pool = fallbackStyleAlignedPool;
+      }
     }
   }
 
@@ -6094,8 +6062,21 @@ export async function POST(request: Request) {
     });
     logInfo("[ai-look][single][step-1][canonical-context]", { ...canonicalContext });
 
+    let styleCatalog: StyleDirectiveCatalogEntry[] = [];
+    try {
+      styleCatalog = await getActiveStyleDirectiveCatalog();
+      logInfo("[ai-look][single][step-1][style-catalog]", {
+        loaded: styleCatalog.length,
+      });
+    } catch (error) {
+      logWarn("[ai-look][single][step-1][style-catalog][load-failed]", {
+        error: toErrorDetails(error),
+      });
+    }
+
     const userDirectives = extractUserIntentDirectives({
       userPrompt,
+      styleCatalog,
       selectedTools: parsedSingleBody.data.selectedTools,
     });
     logInfo("[ai-look][single][step-1][selected-tools]", {
@@ -6242,6 +6223,7 @@ export async function POST(request: Request) {
         formalityMismatchSignal: singleFeedbackSignals.formalityMismatchSignal,
         styleMismatchSignal: singleFeedbackSignals.styleMismatchSignal,
         timeMismatchSignal: singleFeedbackSignals.timeMismatchSignal,
+        evidenceCounts: singleFeedbackSignals.evidenceCounts,
       });
     } catch (error) {
       logWarn("[ai-look][single][feedback-signals][read-failed]", {

@@ -69,7 +69,7 @@ Use this file to track proposed features before implementation.
   - Deterministic merge policy between tool styles and prompt-derived styles.
 - **Priority**: `Next`
 - **Effort**: `L`
-- **Status**: `Planned`
+- **Status**: `Done`
 - **Notes**: Preserve canonical style enums to keep rerank/style-fit behavior stable. Spec: `vibe/spec_profile_styles_tool.md`.
 
 ## Later

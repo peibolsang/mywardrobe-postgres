@@ -143,16 +143,6 @@ interface ToolCatalogOption {
   label: string;
 }
 
-const STYLE_TOOL_OPTIONS: ToolCatalogOption[] = [
-  { id: "vintage_americana", label: "Vintage Americana" },
-  { id: "amekaji", label: "Amekaji" },
-  { id: "workwear", label: "Workwear" },
-  { id: "military_heritage", label: "Military Heritage" },
-  { id: "ivy", label: "Ivy / Trad" },
-  { id: "soft_tailoring", label: "Soft Tailoring" },
-  { id: "elevated_slouch", label: "Elevated Slouch" },
-];
-
 const REFERENCE_TOOL_OPTIONS: ToolCatalogOption[] = [
   { id: "albert_muzquiz", label: "Albert Muzquiz" },
   { id: "alessandro_squarzi", label: "Alessandro Squarzi" },
@@ -160,13 +150,6 @@ const REFERENCE_TOOL_OPTIONS: ToolCatalogOption[] = [
   { id: "aaron_levine", label: "Aaron Levine" },
   { id: "simon_crompton", label: "Simon Crompton" },
 ];
-
-const getToolOptionLabel = (tool: SelectedToolOption): string => {
-  const options = tool.type === "style" ? STYLE_TOOL_OPTIONS : REFERENCE_TOOL_OPTIONS;
-  const match = options.find((option) => option.id === tool.id);
-  const typeLabel = tool.type === "style" ? "Style" : "Reference";
-  return match ? `${typeLabel}: ${match.label}` : `${typeLabel}: ${tool.id}`;
-};
 
 const isValidSingleLookResult = (value: unknown): value is SingleLookResult => {
   if (!value || typeof value !== "object") return false;
@@ -225,6 +208,7 @@ export default function AiLookClient() {
   const [anchorGarmentId, setAnchorGarmentId] = useState<number | null>(null);
   const [anchorMode, setAnchorMode] = useState<AnchorMode>("strict");
   const [anchorLabel, setAnchorLabel] = useState<string | null>(null);
+  const [styleToolOptions, setStyleToolOptions] = useState<ToolCatalogOption[]>([]);
   const [selectedTools, setSelectedTools] = useState<SelectedToolOption[]>([]);
 
   const [destination, setDestination] = useState("");
@@ -263,6 +247,35 @@ export default function AiLookClient() {
   const isSingleLoading = isLoading && loadingMode === "single";
   const isTravelLoading = isLoading && loadingMode === "travel";
   const primaryLook = singleResult?.primaryLook ?? null;
+
+  useEffect(() => {
+    let isActive = true;
+    const loadStyleToolOptions = async () => {
+      try {
+        const response = await fetch("/api/profile/styles", { cache: "no-store" });
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          selectedStyles?: Array<{ key?: string; name?: string }>;
+        };
+        const selectedStyles = Array.isArray(payload.selectedStyles) ? payload.selectedStyles : [];
+        const options = selectedStyles
+          .map((style) => ({
+            id: typeof style.key === "string" ? style.key.trim() : "",
+            label: typeof style.name === "string" ? style.name.trim() : "",
+          }))
+          .filter((style) => style.id && style.label);
+        if (!isActive) return;
+        setStyleToolOptions(options);
+      } catch {
+        // Keep empty state when profile styles endpoint is unavailable.
+      }
+    };
+
+    void loadStyleToolOptions();
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   useEffect(() => {
     const rawAnchorId = searchParams.get("anchorGarmentId");
@@ -330,6 +343,13 @@ export default function AiLookClient() {
     setSelectedTools((current) =>
       current.filter((tool) => !(tool.type === toolToRemove.type && tool.id === toolToRemove.id))
     );
+  };
+
+  const getToolOptionLabel = (tool: SelectedToolOption): string => {
+    const options = tool.type === "style" ? styleToolOptions : REFERENCE_TOOL_OPTIONS;
+    const match = options.find((option) => option.id === tool.id);
+    const typeLabel = tool.type === "style" ? "Style" : "Reference";
+    return match ? `${typeLabel}: ${match.label}` : `${typeLabel}: ${tool.id}`;
   };
 
   const submitFeedback = async ({
@@ -718,19 +738,23 @@ export default function AiLookClient() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="w-56">
-                        <DropdownMenuSub>
-                          <DropdownMenuSubTrigger>Style</DropdownMenuSubTrigger>
-                          <DropdownMenuSubContent>
-                            {STYLE_TOOL_OPTIONS.map((option) => (
-                              <DropdownMenuItem
-                                key={`style-tool-${option.id}`}
-                                onClick={() => handleAddTool("style", option.id)}
-                              >
-                                {option.label}
-                              </DropdownMenuItem>
-                            ))}
-                          </DropdownMenuSubContent>
-                        </DropdownMenuSub>
+                        {styleToolOptions.length === 0 ? (
+                          <DropdownMenuItem disabled>Style</DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuSub>
+                            <DropdownMenuSubTrigger>Style</DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent>
+                              {styleToolOptions.map((option) => (
+                                <DropdownMenuItem
+                                  key={`style-tool-${option.id}`}
+                                  onClick={() => handleAddTool("style", option.id)}
+                                >
+                                  {option.label}
+                                </DropdownMenuItem>
+                              ))}
+                            </DropdownMenuSubContent>
+                          </DropdownMenuSub>
+                        )}
                         <DropdownMenuSub>
                           <DropdownMenuSubTrigger>Reference</DropdownMenuSubTrigger>
                           <DropdownMenuSubContent>
