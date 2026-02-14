@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getOwnerKey, isOwnerSession } from "@/lib/owner";
+import { isAllowedOrigin } from "@/lib/request-origin";
 import {
   deactivateUserProfileReferenceByKey,
   getUserProfileActiveReferences,
@@ -55,6 +56,10 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    if (!isAllowedOrigin(request)) {
+      return NextResponse.json({ error: "Invalid request origin." }, { status: 403 });
+    }
+
     if (!(await isOwnerSession())) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
@@ -93,6 +98,10 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    if (!isAllowedOrigin(request)) {
+      return NextResponse.json({ error: "Invalid request origin." }, { status: 403 });
+    }
+
     if (!(await isOwnerSession())) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }

@@ -116,7 +116,7 @@ Use imperative commit subjects.
   - `app/middleware.ts` applies auth gate on `/garments/*` (session required) and owner gate on `/editor/*` + `/ai-look/*` + `/profile/*` for defense-in-depth.
 - API-level protection:
   - `/api/wardrobe`, `/api/editor-options`, `/api/upload`, and `/api/ai-look` require authenticated owner session (`403` on failure).
-  - `/api/profile`, `/api/profile/styles`, `/api/profile/references` (`GET`/`POST`/`DELETE`), `/api/profile/references/load`, and `/api/profile/references/catalog` require authenticated owner session (`403` on failure).
+  - `/api/profile`, `/api/profile/styles`, `/api/profile/references` (`GET`/`POST`/`DELETE`), and `/api/profile/references/catalog` require authenticated owner session (`403` on failure).
   - `/api/ai-look/feedback` also requires authenticated owner session (`403` on failure).
 - Mutation-level protection:
   - `createGarment`, `updateGarment`, and `deleteGarment` enforce owner checks server-side regardless of UI access.
@@ -128,6 +128,7 @@ Use imperative commit subjects.
   - max request count per rolling time window
 - `AUTH_EMAIL_FROM` can be used to configure sender address; fallback is `onboarding@resend.dev`.
 - AI recommendation API hardening (`/api/ai-look`) includes same-origin POST validation and owner-scoped persistent DB-backed rate limiting (minute + hour windows) with in-memory fallback only if the DB limiter is unavailable, to reduce abuse risk and OpenAI cost exposure.
+- Profile mutation API hardening includes same-origin validation on `POST`/`DELETE` for `/api/profile`, `/api/profile/styles`, and `/api/profile/references`.
 
 ## Caching strategy: 
 - Shared wardrobe reads are centralized in `lib/wardrobe.ts` via `getWardrobeData()`.

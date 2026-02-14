@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { isOwnerSession, getOwnerKey } from "@/lib/owner";
+import { isAllowedOrigin } from "@/lib/request-origin";
 import { getUserProfileByOwnerKey, upsertUserProfileDefaultLocation } from "@/lib/user-profile";
 
 const profileUpdateSchema = z.object({
@@ -29,6 +30,10 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    if (!isAllowedOrigin(request)) {
+      return NextResponse.json({ error: "Invalid request origin." }, { status: 403 });
+    }
+
     if (!(await isOwnerSession())) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }

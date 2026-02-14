@@ -197,3 +197,4 @@
 - Profile reference card-content note: Simplified saved-reference cards to show only `Style Bias` and `Formality Bias` (both as chips), and aligned both bias section titles to the same visual style.
 - Profile reference card-actions note: Moved saved-reference `Edit`/`Delete` icon actions from the bottom row to the top-right of each card header for tighter scanning and quicker access.
 - Profile reference card-header alignment note: Aligned saved-reference title and top-right icon actions on the same horizontal row by centering header cross-axis alignment.
+- Profile API hardening note: Added same-origin validation for profile mutating endpoints (`/api/profile`, `/api/profile/styles`, `/api/profile/references` POST/DELETE), and removed deprecated `/api/profile/references/load` route after switching to manual reference entry.
