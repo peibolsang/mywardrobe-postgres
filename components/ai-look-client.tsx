@@ -143,14 +143,6 @@ interface ToolCatalogOption {
   label: string;
 }
 
-const REFERENCE_TOOL_OPTIONS: ToolCatalogOption[] = [
-  { id: "albert_muzquiz", label: "Albert Muzquiz" },
-  { id: "alessandro_squarzi", label: "Alessandro Squarzi" },
-  { id: "derek_guy", label: "Derek Guy" },
-  { id: "aaron_levine", label: "Aaron Levine" },
-  { id: "simon_crompton", label: "Simon Crompton" },
-];
-
 const isValidSingleLookResult = (value: unknown): value is SingleLookResult => {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
@@ -209,6 +201,7 @@ export default function AiLookClient() {
   const [anchorMode, setAnchorMode] = useState<AnchorMode>("strict");
   const [anchorLabel, setAnchorLabel] = useState<string | null>(null);
   const [styleToolOptions, setStyleToolOptions] = useState<ToolCatalogOption[]>([]);
+  const [referenceToolOptions, setReferenceToolOptions] = useState<ToolCatalogOption[]>([]);
   const [selectedTools, setSelectedTools] = useState<SelectedToolOption[]>([]);
 
   const [destination, setDestination] = useState("");
@@ -250,28 +243,49 @@ export default function AiLookClient() {
 
   useEffect(() => {
     let isActive = true;
-    const loadStyleToolOptions = async () => {
+    const loadToolOptions = async () => {
       try {
-        const response = await fetch("/api/profile/styles", { cache: "no-store" });
-        if (!response.ok) return;
-        const payload = (await response.json()) as {
-          selectedStyles?: Array<{ key?: string; name?: string }>;
-        };
-        const selectedStyles = Array.isArray(payload.selectedStyles) ? payload.selectedStyles : [];
-        const options = selectedStyles
+        const [stylesResponse, referencesResponse] = await Promise.all([
+          fetch("/api/profile/styles", { cache: "no-store" }),
+          fetch("/api/profile/references", { cache: "no-store" }),
+        ]);
+        if (!stylesResponse.ok && !referencesResponse.ok) return;
+
+        const stylesPayload = stylesResponse.ok
+          ? (await stylesResponse.json()) as {
+              selectedStyles?: Array<{ key?: string; name?: string }>;
+            }
+          : null;
+        const selectedStyles = Array.isArray(stylesPayload?.selectedStyles) ? stylesPayload.selectedStyles : [];
+        const styleOptions = selectedStyles
           .map((style) => ({
             id: typeof style.key === "string" ? style.key.trim() : "",
             label: typeof style.name === "string" ? style.name.trim() : "",
           }))
           .filter((style) => style.id && style.label);
+
+        const referencesPayload = referencesResponse.ok
+          ? (await referencesResponse.json()) as {
+              toolOptions?: Array<{ id?: string; label?: string }>;
+            }
+          : null;
+        const references = Array.isArray(referencesPayload?.toolOptions) ? referencesPayload.toolOptions : [];
+        const referenceOptions = references
+          .map((reference) => ({
+            id: typeof reference.id === "string" ? reference.id.trim() : "",
+            label: typeof reference.label === "string" ? reference.label.trim() : "",
+          }))
+          .filter((reference) => reference.id && reference.label);
+
         if (!isActive) return;
-        setStyleToolOptions(options);
+        setStyleToolOptions(styleOptions);
+        setReferenceToolOptions(referenceOptions);
       } catch {
-        // Keep empty state when profile styles endpoint is unavailable.
+        // Keep empty state when profile tool endpoints are unavailable.
       }
     };
 
-    void loadStyleToolOptions();
+    void loadToolOptions();
     return () => {
       isActive = false;
     };
@@ -346,7 +360,7 @@ export default function AiLookClient() {
   };
 
   const getToolOptionLabel = (tool: SelectedToolOption): string => {
-    const options = tool.type === "style" ? styleToolOptions : REFERENCE_TOOL_OPTIONS;
+    const options = tool.type === "style" ? styleToolOptions : referenceToolOptions;
     const match = options.find((option) => option.id === tool.id);
     const typeLabel = tool.type === "style" ? "Style" : "Reference";
     return match ? `${typeLabel}: ${match.label}` : `${typeLabel}: ${tool.id}`;
@@ -755,19 +769,23 @@ export default function AiLookClient() {
                             </DropdownMenuSubContent>
                           </DropdownMenuSub>
                         )}
-                        <DropdownMenuSub>
-                          <DropdownMenuSubTrigger>Reference</DropdownMenuSubTrigger>
-                          <DropdownMenuSubContent>
-                            {REFERENCE_TOOL_OPTIONS.map((option) => (
-                              <DropdownMenuItem
-                                key={`reference-tool-${option.id}`}
-                                onClick={() => handleAddTool("reference", option.id)}
-                              >
-                                {option.label}
-                              </DropdownMenuItem>
-                            ))}
-                          </DropdownMenuSubContent>
-                        </DropdownMenuSub>
+                        {referenceToolOptions.length === 0 ? (
+                          <DropdownMenuItem disabled>Reference</DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuSub>
+                            <DropdownMenuSubTrigger>Reference</DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent>
+                              {referenceToolOptions.map((option) => (
+                                <DropdownMenuItem
+                                  key={`reference-tool-${option.id}`}
+                                  onClick={() => handleAddTool("reference", option.id)}
+                                >
+                                  {option.label}
+                                </DropdownMenuItem>
+                              ))}
+                            </DropdownMenuSubContent>
+                          </DropdownMenuSub>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                     {selectedTools.map((tool) => (

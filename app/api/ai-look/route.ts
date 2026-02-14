@@ -12,6 +12,11 @@ import { getWardrobeData } from "@/lib/wardrobe";
 import { sql } from "@/lib/db";
 import type { Garment } from "@/lib/types";
 import { getActiveStyleDirectiveCatalog, type StyleDirectiveCatalogEntry } from "@/lib/profile-styles";
+import {
+  getActiveReferenceDirectiveCatalog,
+  type ReferenceDirectiveCatalogEntry,
+} from "@/lib/profile-references";
+import { canonicalizeFormalityOption, canonicalizeStyleTags } from "@/lib/style-taxonomy";
 import { getUserProfileByOwnerKey } from "@/lib/user-profile";
 import schema from "@/public/schema.json";
 
@@ -352,62 +357,6 @@ const SINGLE_LOOK_TARGET_CANDIDATES = 6;
 const SINGLE_LOOK_MAX_GENERATION_ATTEMPTS = 2;
 const SINGLE_RECENT_HISTORY_LIMIT = 18;
 const TRAVEL_HISTORY_ROW_LIMIT = 240;
-
-const REFERENCE_ALIAS_DICTIONARY: Array<{
-  referenceKey: string;
-  terms: string[];
-  styleTags: string[];
-  silhouetteTags: string[];
-  materialPrefer: string[];
-  materialAvoid: string[];
-  formalityBias?: string | null;
-}> = [
-  {
-    referenceKey: "albert_muzquiz",
-    terms: ["albert muzquiz", "muzquiz", "edgy albert"],
-    styleTags: ["vintage", "western", "americana", "workwear"],
-    silhouetteTags: ["high-waisted", "boxy", "straight-leg", "cropped"],
-    materialPrefer: ["heavy denim", "vintage cotton", "leather", "gabardine"],
-    materialAvoid: ["technical nylon", "slim-fit stretch fabrics"],
-    formalityBias: "Elevated Casual",
-  },
-  {
-    referenceKey: "alessandro_squarzi",
-    terms: ["alessandro squarzi", "squarzi", "as65"],
-    styleTags: ["workwear", "vintage", "classic", "western"],
-    silhouetteTags: ["relaxed", "heritage", "rugged-tailoring"],
-    materialPrefer: ["selvedge denim", "vintage military canvas", "suede", "corduroy"],
-    materialAvoid: ["synthetic sportswear", "stiff business formal"],
-    formalityBias: "Elevated Casual",
-  },
-  {
-    referenceKey: "derek_guy",
-    terms: ["derek guy", "dieworkwear", "menswear guy"],
-    styleTags: ["classic-menswear", "ivy", "tailoring", "soft-shoulder"],
-    silhouetteTags: ["full-cut", "drape", "high-rise", "proportionate"],
-    materialPrefer: ["tweed", "flannel", "oxford cloth", "linen"],
-    materialAvoid: ["skinny-fit", "low-rise trousers", "short jackets"],
-    formalityBias: "Business Casual",
-  },
-  {
-    referenceKey: "aaron_levine",
-    terms: ["aaron levine", "levine"],
-    styleTags: ["elevated-slouch", "high-low", "textural", "grunge-luxe"],
-    silhouetteTags: ["oversized", "fluid", "relaxed", "layered"],
-    materialPrefer: ["brushed wool", "heavy knits", "washed silk", "distressed leather"],
-    materialAvoid: ["starched fabrics", "rigid tailoring"],
-    formalityBias: "Elevated Casual",
-  },
-  {
-    referenceKey: "simon_crompton",
-    terms: ["simon crompton", "permanent style", "crompton"],
-    styleTags: ["sartorial", "luxury-minimalist", "bespoke", "craft-focused"],
-    silhouetteTags: ["tailored", "clean", "refined", "natural-shoulder"],
-    materialPrefer: ["cashmere", "vicuña", "high-twist wool", "bespoke shirting"],
-    materialAvoid: ["mass-market blends", "heavy branding", "distressed fabrics"],
-    formalityBias: "Business Formal",
-  },
-];
 
 const WEATHER_TOOL_INPUT_SCHEMA = z.object({
   locationQuery: z.string().min(1).describe("Location query string, e.g. 'Aviles, Asturias, Spain'."),
@@ -1545,16 +1494,10 @@ const dedupeLowercase = (values: string[]): string[] => {
   return result;
 };
 
-const toCanonicalStyleDirectiveTags = (values: string[]): string[] =>
-  dedupeLowercase(
-    values
-      .map((value) => findCanonicalOption(STYLE_OPTIONS, value))
-      .filter((value): value is string => Boolean(value))
-  );
+const toCanonicalStyleDirectiveTags = (values: string[]): string[] => canonicalizeStyleTags(values);
 
 const toCanonicalFormalityDirective = (value?: string | null): string | null => {
-  if (!value) return null;
-  return findCanonicalOption(FORMALITY_OPTIONS, value);
+  return canonicalizeFormalityOption(value);
 };
 
 const buildStyleDirectiveFromEntry = ({
@@ -1583,7 +1526,7 @@ const buildReferenceDirectiveFromEntry = ({
   sourceTerms,
   confidence,
 }: {
-  entry: (typeof REFERENCE_ALIAS_DICTIONARY)[number];
+  entry: ReferenceDirectiveCatalogEntry;
   sourceTerms: string[];
   confidence: DirectiveConfidence;
 }): UserReferenceDirective => ({
@@ -1620,10 +1563,12 @@ const dedupeSelectedTools = (selectedTools: SingleSelectedTool[] | undefined): N
 const extractUserIntentDirectives = ({
   userPrompt,
   styleCatalog,
+  referenceCatalog,
   selectedTools,
 }: {
   userPrompt: string;
   styleCatalog: StyleDirectiveCatalogEntry[];
+  referenceCatalog: ReferenceDirectiveCatalogEntry[];
   selectedTools?: SingleSelectedTool[];
 }): UserIntentDirectives => {
   const dedupedSelectedTools = dedupeSelectedTools(selectedTools);
@@ -1661,7 +1606,7 @@ const extractUserIntentDirectives = ({
       continue;
     }
 
-    const referenceEntry = REFERENCE_ALIAS_DICTIONARY.find(
+    const referenceEntry = referenceCatalog.find(
       (entry) => normalizeDirectiveText(entry.referenceKey) === normalizeDirectiveText(selectedTool.id)
     );
     if (referenceEntry) {
@@ -1702,7 +1647,7 @@ const extractUserIntentDirectives = ({
   }
 
   const freeTextReferenceDirectives: UserReferenceDirective[] = [];
-  for (const entry of REFERENCE_ALIAS_DICTIONARY) {
+  for (const entry of referenceCatalog) {
     const matchedTerms = entry.terms.filter((term) => directiveTextIncludesTerm(userPrompt, term));
     if (matchedTerms.length === 0) continue;
     freeTextReferenceDirectives.push(
@@ -6073,10 +6018,22 @@ export async function POST(request: Request) {
         error: toErrorDetails(error),
       });
     }
+    let referenceCatalog: ReferenceDirectiveCatalogEntry[] = [];
+    try {
+      referenceCatalog = await getActiveReferenceDirectiveCatalog(ownerRateLimitKey);
+      logInfo("[ai-look][single][step-1][reference-catalog]", {
+        loaded: referenceCatalog.length,
+      });
+    } catch (error) {
+      logWarn("[ai-look][single][step-1][reference-catalog][load-failed]", {
+        error: toErrorDetails(error),
+      });
+    }
 
     const userDirectives = extractUserIntentDirectives({
       userPrompt,
       styleCatalog,
+      referenceCatalog,
       selectedTools: parsedSingleBody.data.selectedTools,
     });
     logInfo("[ai-look][single][step-1][selected-tools]", {

@@ -88,5 +88,5 @@ Use this file to track proposed features before implementation.
   - Validation guardrails for LLM-generated reference schema.
 - **Priority**: `Later`
 - **Effort**: `L`
-- **Status**: `Planned`
+- **Status**: `Done`
 - **Notes**: Start with owner-only profile scope; multi-user generalization can come later. Spec: `vibe/spec_profile_references_tool.md`.

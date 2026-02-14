@@ -56,7 +56,7 @@ Use imperative commit subjects.
 3. From garment detail (`/garments/[id]`), use the `Edit` action card to open owner-only edit mode for that specific garment (`/editor?garmentId=<id>`); after saving changes, the user is redirected back to the same garment detail read-only view and shown a success toast.
 4. Add new garments via `/add-garment` (owner-only), including image upload.
 5. View distribution analytics in `/stats`.
-6. Configure profile settings in `/profile` (owner-only), including `Default Location` and favorite style selections used by AI Look tooling/directive flows.
+6. Configure profile settings in `/profile` (owner-only), including `Default Location`, favorite style selections, and saved menswear references used by AI Look tooling/directive flows.
 7. Generate AI recommendations via `/ai-look` (owner-only): either a single free-text look or a multi-day "Pack for Travel" plan (destination + date range + reason).
    - From garment details (owner view), `Cmd/Ctrl+K` opens garment actions including `Generate look around this garment`, which routes to `/ai-look?anchorGarmentId=<id>&anchorMode=strict`.
 8. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
@@ -66,7 +66,7 @@ Use imperative commit subjects.
 2. Client components (`components/client/*` and interactive feature components) manage filters, dialogs, local form state, toasts, and URL state.
 3. Server actions (`actions/garment.ts`) own write operations, authorization checks, redirects, and cache invalidation.
 4. Editor pages (`/editor`, `/add-garment`) preload wardrobe/schema/editor-options server-side and render `EditorForm` inside `Suspense` with a layout-matching skeleton fallback to avoid empty-state flash and layout shift.
-5. Profile page (`/profile`) is route-guarded server-side (owner-only), hydrates owner defaults + style preferences, and persists via `/api/profile` and `/api/profile/styles`.
+5. Profile page (`/profile`) is route-guarded server-side (owner-only), hydrates owner defaults + style preferences + saved references, and persists via `/api/profile`, `/api/profile/styles`, and `/api/profile/references`.
 6. AI look page (`/ai-look`) is route-guarded server-side and renders a client UI with two tabs: (a) free-text single-look generation and (b) "Pack for Travel" planning.
    - Single-look prompt includes an `Add Tool` control that lets the user attach explicit `Style` and `Reference` selections as removable chips per request.
 7. `/api/ai-look` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
@@ -82,7 +82,8 @@ Use imperative commit subjects.
    - Single-look weather location resolution priority is `prompt location > profile default location > no-location fallback`; prompt date parsing is intentionally not used in single-look mode.
    - Single-look request payload now optionally accepts `selectedTools` (`[{ type: "style" | "reference", id: string }]`) from the AI Look `Add Tool` UI.
    - Directive merge precedence is deterministic: hard safety/context constraints first, then tool-selected directives, then free-text directives, then derived-profile fallback.
-   - Style directives are sourced from DB-backed style catalog records (aliases + directive payload) rather than hardcoded runtime dictionaries.
+  - Style directives are sourced from DB-backed style catalog records (aliases + directive payload) rather than hardcoded runtime dictionaries.
+  - Reference directives are sourced from DB-backed profile reference records (aliases + directive payload) rather than hardcoded runtime dictionaries.
 2. Single-look recommendation: Step 2 attempts up to six candidates and degrades gracefully when fewer valid candidates are returned. Candidates are wardrobe-ID-only, validated against DB IDs, normalized to exactly four pieces (`outerwear + top + bottom + footwear`), deduplicated by signature, and reranked with objective fit + model confidence + recency/overlap controls.
    - Single mode computes a structured deterministic weather profile (`tempBand`, `precipitation`, `wind`, `humidity`, `wetSurfaceRisk`, `confidence`) and a deterministic derived profile (`formality`, `style`, material targets).
    - Category-aware deterministic hard rules enforce weather and occasion/place compatibility per garment; wet-surface/material conflicts (especially outerwear/footwear) are hard-blocked.
@@ -115,7 +116,7 @@ Use imperative commit subjects.
   - `app/middleware.ts` applies auth gate on `/garments/*` (session required) and owner gate on `/editor/*` + `/ai-look/*` + `/profile/*` for defense-in-depth.
 - API-level protection:
   - `/api/wardrobe`, `/api/editor-options`, `/api/upload`, and `/api/ai-look` require authenticated owner session (`403` on failure).
-  - `/api/profile` and `/api/profile/styles` require authenticated owner session (`403` on failure).
+  - `/api/profile`, `/api/profile/styles`, `/api/profile/references`, `/api/profile/references/load`, and `/api/profile/references/catalog` require authenticated owner session (`403` on failure).
   - `/api/ai-look/feedback` also requires authenticated owner session (`403` on failure).
 - Mutation-level protection:
   - `createGarment`, `updateGarment`, and `deleteGarment` enforce owner checks server-side regardless of UI access.
@@ -281,6 +282,16 @@ Most likely with a **composite primary key** on `(garment_id, *_id)`.
   * rich style directive payload (`canonical_style_tags_json`, `silhouette_bias_tags_json`, `material_prefer_json`, `material_avoid_json`, `formality_bias`)
 * `user_profile_style`
   * owner-selected favorite styles used by `Add Tool > Style` (`owner_key`, `style_catalog_id`, `created_at`)
+
+### Profile Reference Tables
+
+* `user_profile_reference`
+  * owner-scoped saved references (`owner_key`, `key`, `display_name`, `source_name`, `reference_payload_json`, `schema_version`, `is_active`, timestamps)
+  * provisioned via explicit SQL migration script `scripts/sql/create-profile-reference-catalog.sql`
+* `user_profile_reference_alias`
+  * free-text alias terms used for deterministic reference matching (`reference_id`, `alias_term`)
+* `user_profile_reference_directive`
+  * rich reference directive payload (`style_bias_tags_json`, `silhouette_bias_tags_json`, `material_prefer_json`, `material_avoid_json`, `formality_bias`)
 
 
 # 3. IMPORTANT: Self-Improvement

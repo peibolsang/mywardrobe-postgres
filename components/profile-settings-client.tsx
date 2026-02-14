@@ -12,6 +12,7 @@ interface ProfileSettingsClientProps {
   initialDefaultLocation: string;
   initialStyleCatalog: ProfileStyleOption[];
   initialSelectedStyleKeys: string[];
+  initialReferences: ProfileReferenceOption[];
 }
 
 interface ProfileStyleOption {
@@ -21,7 +22,34 @@ interface ProfileStyleOption {
   description: string | null;
 }
 
-type ProfileSection = "default-location" | "favorite-styles";
+interface ProfileReferenceOption {
+  key: string;
+  displayName: string;
+  sourceName: string | null;
+  aliases: string[];
+  schemaVersion: number;
+  styleBiasTags: string[];
+  silhouetteBiasTags: string[];
+  materialPrefer: string[];
+  materialAvoid: string[];
+  formalityBias: string | null;
+}
+
+interface ReferencePreview {
+  key: string;
+  displayName: string;
+  sourceName: string | null;
+  aliases: string[];
+  styleBiasTags: string[];
+  silhouetteBiasTags: string[];
+  materialPrefer: string[];
+  materialAvoid: string[];
+  formalityBias: string | null;
+  schemaVersion: number;
+  summary: string;
+}
+
+type ProfileSection = "default-location" | "favorite-styles" | "menswear-references";
 
 const dedupeStyleKeys = (values: string[]): string[] => {
   const seen = new Set<string>();
@@ -39,6 +67,7 @@ export default function ProfileSettingsClient({
   initialDefaultLocation,
   initialStyleCatalog,
   initialSelectedStyleKeys,
+  initialReferences,
 }: ProfileSettingsClientProps) {
   const [activeSection, setActiveSection] = useState<ProfileSection>("default-location");
   const [defaultLocation, setDefaultLocation] = useState(initialDefaultLocation);
@@ -46,6 +75,11 @@ export default function ProfileSettingsClient({
   const [selectedStyleKeys, setSelectedStyleKeys] = useState(
     dedupeStyleKeys(initialSelectedStyleKeys)
   );
+  const [references, setReferences] = useState<ProfileReferenceOption[]>(initialReferences);
+  const [referenceNameInput, setReferenceNameInput] = useState("");
+  const [referencePreview, setReferencePreview] = useState<ReferencePreview | null>(null);
+  const [isLoadingReference, setIsLoadingReference] = useState(false);
+  const [isSavingReference, setIsSavingReference] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   const toggleStyleSelection = (styleKey: string) => {
@@ -104,6 +138,97 @@ export default function ProfileSettingsClient({
     });
   };
 
+  const onLoadReference = async () => {
+    const name = referenceNameInput.trim();
+    if (!name) {
+      toast.error("Please enter a menswear reference name.");
+      return;
+    }
+
+    setIsLoadingReference(true);
+    try {
+      const response = await fetch("/api/profile/references/load", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        reference?: ReferencePreview;
+      } | null;
+
+      if (!response.ok || !payload?.reference) {
+        throw new Error(payload?.error || "Failed to load reference profile.");
+      }
+
+      setReferencePreview(payload.reference);
+      toast.success("Reference profile loaded.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load reference profile.";
+      toast.error(message);
+    } finally {
+      setIsLoadingReference(false);
+    }
+  };
+
+  const onAddReference = async () => {
+    if (!referencePreview) {
+      toast.error("Load a reference profile before adding.");
+      return;
+    }
+
+    setIsSavingReference(true);
+    try {
+      const response = await fetch("/api/profile/references", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          reference: {
+            key: referencePreview.key,
+            displayName: referencePreview.displayName,
+            sourceName: referencePreview.sourceName,
+            aliases: referencePreview.aliases,
+            styleBiasTags: referencePreview.styleBiasTags,
+            silhouetteBiasTags: referencePreview.silhouetteBiasTags,
+            materialPrefer: referencePreview.materialPrefer,
+            materialAvoid: referencePreview.materialAvoid,
+            formalityBias: referencePreview.formalityBias,
+            schemaVersion: referencePreview.schemaVersion,
+            referencePayload: {
+              summary: referencePreview.summary,
+            },
+          },
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        references?: ProfileReferenceOption[];
+      } | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "Failed to save reference profile.");
+      }
+
+      if (Array.isArray(payload?.references)) {
+        setReferences(payload.references);
+      }
+      setReferencePreview(null);
+      setReferenceNameInput("");
+      toast.success("Reference added to your profile.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save reference profile.";
+      toast.error(message);
+    } finally {
+      setIsSavingReference(false);
+    }
+  };
+
   return (
     <div className="min-h-[calc(100dvh-4rem)] bg-gray-50 px-4 py-8 md:px-8">
       <div className="mx-auto w-full max-w-2xl">
@@ -134,6 +259,15 @@ export default function ProfileSettingsClient({
               >
                 Favorite Styles
               </Button>
+              <Button
+                type="button"
+                variant={activeSection === "menswear-references" ? "secondary" : "ghost"}
+                className="justify-start"
+                onClick={() => setActiveSection("menswear-references")}
+                disabled={isPending}
+              >
+                Menswear References
+              </Button>
             </nav>
 
             <div className="space-y-4">
@@ -151,7 +285,9 @@ export default function ProfileSettingsClient({
                     maxLength={160}
                   />
                 </div>
-              ) : (
+              ) : null}
+
+              {activeSection === "favorite-styles" ? (
                 <div className="space-y-2">
                   <Label>Favorite Styles</Label>
                   <p className="text-xs text-muted-foreground">
@@ -189,13 +325,106 @@ export default function ProfileSettingsClient({
                     </div>
                   )}
                 </div>
-              )}
+              ) : null}
 
-              <div className="flex justify-end">
-                <Button type="button" disabled={isPending} onClick={onSave}>
-                  {isPending ? "Saving..." : "Save Profile"}
-                </Button>
-              </div>
+              {activeSection === "menswear-references" ? (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="reference-name">Add Menswear Reference</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Type a full name, click `Generate Reference`, review the structured profile, then `Add` it to your tools.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Input
+                        id="reference-name"
+                        placeholder="Example: Alessandro Squarzi"
+                        value={referenceNameInput}
+                        onChange={(event) => setReferenceNameInput(event.target.value)}
+                        maxLength={160}
+                        disabled={isLoadingReference || isSavingReference}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={onLoadReference}
+                        disabled={isLoadingReference || isSavingReference}
+                      >
+                        {isLoadingReference ? "Generating..." : "Generate Reference"}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {referencePreview ? (
+                    <div className="space-y-2 rounded-md border border-slate-200 bg-white p-3">
+                      <p className="text-sm font-medium text-slate-900">{referencePreview.displayName}</p>
+                      <p className="text-xs text-muted-foreground">{referencePreview.summary}</p>
+                      <p className="text-xs text-slate-700">
+                        Style bias: {referencePreview.styleBiasTags.join(", ")}
+                      </p>
+                      <p className="text-xs text-slate-700">
+                        Formality bias: {referencePreview.formalityBias || "None"}
+                      </p>
+                      <p className="text-xs text-slate-700">
+                        Material prefer: {referencePreview.materialPrefer.join(", ") || "None"}
+                      </p>
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => setReferencePreview(null)}
+                          disabled={isSavingReference}
+                        >
+                          Dismiss
+                        </Button>
+                        <Button
+                          type="button"
+                          onClick={onAddReference}
+                          disabled={isSavingReference}
+                        >
+                          {isSavingReference ? "Adding..." : "Add"}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="space-y-2">
+                    <Label>Saved References</Label>
+                    {references.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        No saved references yet. Add one above to enable `Add Tool &gt; Reference`.
+                      </p>
+                    ) : (
+                      <div className="grid gap-2">
+                        {references.map((reference) => (
+                          <div
+                            key={reference.key}
+                            className="rounded-md border border-slate-200 bg-white px-3 py-2"
+                          >
+                            <p className="text-sm font-medium text-slate-900">{reference.displayName}</p>
+                            <p className="text-xs text-slate-700">
+                              Style bias: {reference.styleBiasTags.join(", ") || "None"}
+                            </p>
+                            <p className="text-xs text-slate-700">
+                              Formality bias: {reference.formalityBias || "None"}
+                            </p>
+                            <p className="text-xs text-slate-700">
+                              Material preference: {reference.materialPrefer.join(", ") || "None"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
+              {activeSection !== "menswear-references" ? (
+                <div className="flex justify-end">
+                  <Button type="button" disabled={isPending} onClick={onSave}>
+                    {isPending ? "Saving..." : "Save Profile"}
+                  </Button>
+                </div>
+              ) : null}
             </div>
           </CardContent>
         </Card>
