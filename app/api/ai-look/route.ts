@@ -1730,8 +1730,23 @@ const mergeDerivedProfileWithUserDirectives = ({
     avoidSet.delete(bucket);
   }
 
+  const selectedToolFormalityBias = toCanonicalFormalityDirective(
+    userDirectives.styleDirectives.find(
+      (directive) =>
+        directive.formalityBias &&
+        directive.sourceTerms.some((term) => normalize(term).toLowerCase().startsWith("tool:"))
+    )?.formalityBias ??
+    userDirectives.referenceDirectives.find(
+      (directive) =>
+        directive.formalityBias &&
+        directive.sourceTerms.some((term) => normalize(term).toLowerCase().startsWith("tool:"))
+    )?.formalityBias ??
+    null
+  );
+
   return {
-    formality: derivedProfile.formality ?? userDirectives.merged.formalityBias,
+    // Tool-selected formality bias must take precedence over derived fallback.
+    formality: selectedToolFormalityBias ?? userDirectives.merged.formalityBias ?? derivedProfile.formality,
     style: mergedStyles.length > 0 ? mergedStyles : derivedProfile.style,
     materialTargets: {
       prefer: Array.from(preferSet),
@@ -1777,6 +1792,23 @@ const computeStyleDirectiveFit = ({
   }
 
   const requestedStyleTagsNormalized = dedupeLowercase(requestedStyleTags);
+  const toolRequestedStyleTags = dedupeLowercase([
+    ...(
+      userDirectives.styleDirectives
+        .filter((directive) =>
+          directive.sourceTerms.some((term) => normalize(term).toLowerCase().startsWith("tool:"))
+        )
+        .flatMap((directive) => directive.canonicalStyleTags)
+    ),
+    ...(
+      userDirectives.referenceDirectives
+        .filter((directive) =>
+          directive.sourceTerms.some((term) => normalize(term).toLowerCase().startsWith("tool:"))
+        )
+        .flatMap((directive) => directive.styleBiasTags)
+    ),
+  ]);
+  const toolRequestedSet = new Set(toolRequestedStyleTags.map((tag) => tag.toLowerCase()));
   const requestedSet = new Set(requestedStyleTagsNormalized.map((tag) => tag.toLowerCase()));
   let score = 0;
   let styleMatchCount = 0;
@@ -1817,6 +1849,10 @@ const computeStyleDirectiveFit = ({
   const missingStyleTags = requestedStyleTagsNormalized
     .map((tag) => tag.toLowerCase())
     .filter((tag) => !styleTagHitCounts.has(tag));
+  const matchedToolStyleTagCount = matchedStyleTags.filter((tag) => toolRequestedSet.has(tag.toLowerCase())).length;
+  const missingToolStyleTags = toolRequestedStyleTags
+    .map((tag) => tag.toLowerCase())
+    .filter((tag) => !styleTagHitCounts.has(tag));
   const matchedUniqueStyleTagCount = matchedStyleTags.length;
   const styleCoverageRatio = requestedStyleTagsNormalized.length > 0
     ? matchedUniqueStyleTagCount / requestedStyleTagsNormalized.length
@@ -1825,6 +1861,10 @@ const computeStyleDirectiveFit = ({
   score += matchedUniqueStyleTagCount * 6;
   score += styleCoverageBonus;
   score -= missingStyleTags.length * 5;
+  if (toolRequestedStyleTags.length > 0) {
+    score += matchedToolStyleTagCount * 6;
+    score -= missingToolStyleTags.length * 9;
+  }
 
   if (styleMatchCount === 0) {
     score -= 12;
@@ -4008,6 +4048,211 @@ const recentSignatureSetFromHistory = (history: SingleLookHistoryEntry[]): Set<s
 const recentUsedIdSetFromHistory = (history: SingleLookHistoryEntry[]): Set<number> =>
   new Set(history.flatMap((entry) => entry.ids));
 
+const isToolSourcedDirective = (sourceTerms: string[]): boolean =>
+  sourceTerms.some((term) => normalize(term).toLowerCase().startsWith("tool:"));
+
+const getToolStyleTagGroups = (userDirectives?: UserIntentDirectives | null): string[][] => {
+  if (!userDirectives) return [];
+
+  const styleGroups = userDirectives.styleDirectives
+    .filter((directive) => isToolSourcedDirective(directive.sourceTerms))
+    .map((directive) => dedupeLowercase(directive.canonicalStyleTags));
+
+  const referenceGroups = userDirectives.referenceDirectives
+    .filter((directive) => isToolSourcedDirective(directive.sourceTerms))
+    .map((directive) => dedupeLowercase(directive.styleBiasTags));
+
+  return [...styleGroups, ...referenceGroups].filter((group) => group.length > 0);
+};
+
+const countCoveredToolStyleGroups = (
+  lineup: Array<Pick<Garment, "style">>,
+  toolStyleTagGroups: string[][]
+): number => {
+  if (toolStyleTagGroups.length === 0) return 0;
+  const lineupStyles = new Set(lineup.map((garment) => normalize(garment.style).toLowerCase()).filter(Boolean));
+  return toolStyleTagGroups.filter((group) =>
+    group.some((tag) => lineupStyles.has(normalize(tag).toLowerCase()))
+  ).length;
+};
+
+const getToolMaterialAvoidTerms = (userDirectives?: UserIntentDirectives | null): string[] => {
+  if (!userDirectives) return [];
+  return dedupeLowercase([
+    ...userDirectives.styleDirectives
+      .filter((directive) => isToolSourcedDirective(directive.sourceTerms))
+      .flatMap((directive) => directive.materialBias.avoid),
+    ...userDirectives.referenceDirectives
+      .filter((directive) => isToolSourcedDirective(directive.sourceTerms))
+      .flatMap((directive) => directive.materialBias.avoid),
+  ]);
+};
+
+const candidateHasToolMaterialAvoidConflict = (
+  candidate: SingleLookCandidate,
+  toolMaterialAvoidTerms: string[]
+): boolean => {
+  if (toolMaterialAvoidTerms.length === 0) return false;
+  const avoidTerms = toolMaterialAvoidTerms.map((term) => normalize(term).toLowerCase()).filter(Boolean);
+  if (avoidTerms.length === 0) return false;
+
+  for (const garment of candidate.lineupGarments) {
+    const materials = (garment.material_composition ?? []).map((entry) => normalize(entry.material).toLowerCase());
+    if (
+      avoidTerms.some((avoid) =>
+        materials.some((material) => material.includes(avoid))
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+type SingleLookRerankBreakdown = {
+  total: number;
+  baseConfidence: number;
+  styleDirectiveScore: number;
+  toolStyleCoveragePenalty: number;
+  toolMaterialAvoidPenalty: number;
+  matchingHistoryPenalty: number;
+  historyOverlapPenalty: number;
+  feedbackPenalty: number;
+};
+
+const computeSingleLookRerankBreakdown = ({
+  candidate,
+  history,
+  intent,
+  weatherContext,
+  weatherProfile,
+  derivedProfile,
+  userDirectives,
+  feedbackSignals,
+}: {
+  candidate: SingleLookCandidate;
+  history: SingleLookHistoryEntry[];
+  intent: CanonicalIntent;
+  weatherContext?: string | null;
+  weatherProfile?: WeatherProfile | null;
+  derivedProfile?: DerivedProfile | null;
+  userDirectives?: UserIntentDirectives | null;
+  feedbackSignals?: SingleFeedbackSignals | null;
+}): SingleLookRerankBreakdown => {
+  const styleDirectiveFit = computeStyleDirectiveFit({
+    lineup: candidate.lineupGarments,
+    userDirectives,
+  });
+
+  const toolStyleGroups = getToolStyleTagGroups(userDirectives);
+  const coveredToolGroups = countCoveredToolStyleGroups(candidate.lineupGarments, toolStyleGroups);
+  const missingToolGroups = Math.max(0, toolStyleGroups.length - coveredToolGroups);
+  // Keep tool-style influence soft to avoid over-constraining diverse but valid candidates.
+  const toolStyleCoveragePenalty = missingToolGroups * 4;
+
+  const toolMaterialAvoidTerms = getToolMaterialAvoidTerms(userDirectives);
+  // Material avoid conflicts should bias rerank, not hard-dominate it.
+  const toolMaterialAvoidPenalty = candidateHasToolMaterialAvoidConflict(candidate, toolMaterialAvoidTerms) ? 6 : 0;
+
+  const matchingHistoryCount = history.filter((item) => item.signature === candidate.signature).length;
+  const matchingHistoryPenalty = matchingHistoryCount > 0 ? Math.min(48, matchingHistoryCount * 16) : 0;
+
+  const historyIds = history.map((item) => item.ids).filter((ids) => ids.length > 0);
+  const historyOverlap = historyIds.length > 0
+    ? maxOverlapAgainstHistory(candidate.selectedGarmentIds, historyIds)
+    : 0;
+  const historyOverlapPenalty = Math.round(historyOverlap * 30);
+
+  let feedbackPenalty = 0;
+  if (feedbackSignals) {
+    if (feedbackSignals.penalizedSignatures.has(candidate.signature)) {
+      feedbackPenalty += 22;
+    }
+
+    const penalizedOverlapCount = candidate.selectedGarmentIds.filter((id) =>
+      feedbackSignals.penalizedGarmentIds.has(id)
+    ).length;
+    feedbackPenalty += Math.min(28, penalizedOverlapCount * 7);
+
+    const isWetContext = weatherProfile?.wetSurfaceRisk === "high" || weatherProfile?.wetSurfaceRisk === "medium";
+    if (isWetContext && (feedbackSignals.rainMismatchSignal || feedbackSignals.materialMismatchSignal)) {
+      let wetMaterialPenalty = 0;
+      for (const garment of candidate.lineupGarments) {
+        const category = categorizeType(garment.type);
+        if (category !== "outerwear" && category !== "footwear") continue;
+        const technicalShare = materialBucketShare(garment.material_composition, "technical");
+        const absorbentShare = materialBucketShare(garment.material_composition, "absorbent");
+        if (absorbentShare > 0.45 && technicalShare < 0.25) {
+          wetMaterialPenalty += 12;
+        }
+      }
+      feedbackPenalty += wetMaterialPenalty;
+    }
+
+    if (feedbackSignals.formalityMismatchSignal && derivedProfile?.formality) {
+      const mismatches = candidate.lineupGarments.filter(
+        (garment) => normalize(garment.formality).toLowerCase() !== derivedProfile.formality!.toLowerCase()
+      ).length;
+      feedbackPenalty += mismatches * 3;
+    }
+
+    if (feedbackSignals.styleMismatchSignal && (derivedProfile?.style.length ?? 0) > 0) {
+      const mismatches = candidate.lineupGarments.filter(
+        (garment) =>
+          !derivedProfile!.style.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase())
+      ).length;
+      feedbackPenalty += mismatches * 2;
+    }
+
+    if (feedbackSignals.timeMismatchSignal && intent.timeOfDay.length > 0) {
+      const mismatches = candidate.lineupGarments.filter(
+        (garment) =>
+          !Boolean(intersectionMatches(garment.suitable_time_of_day ?? [], intent.timeOfDay, { allDayAlias: "all day" }))
+      ).length;
+      feedbackPenalty += mismatches * 2;
+    }
+
+    if (feedbackSignals.materialMismatchSignal) {
+      const materialScores = candidate.lineupGarments.map((garment) =>
+        computeMaterialIntentScore({
+          materialComposition: garment.material_composition,
+          intent,
+          category: categorizeType(garment.type),
+          weatherContext,
+          weatherProfile,
+          derivedProfile,
+        })
+      );
+      const averageMaterialScore = materialScores.length > 0
+        ? materialScores.reduce((sum, value) => sum + value, 0) / materialScores.length
+        : 0;
+      if (averageMaterialScore < 0) {
+        feedbackPenalty += Math.round(Math.abs(averageMaterialScore));
+      }
+    }
+  }
+
+  const total =
+    candidate.confidence +
+    styleDirectiveFit.score -
+    toolStyleCoveragePenalty -
+    toolMaterialAvoidPenalty -
+    matchingHistoryPenalty -
+    historyOverlapPenalty -
+    feedbackPenalty;
+
+  return {
+    total,
+    baseConfidence: candidate.confidence,
+    styleDirectiveScore: styleDirectiveFit.score,
+    toolStyleCoveragePenalty,
+    toolMaterialAvoidPenalty,
+    matchingHistoryPenalty,
+    historyOverlapPenalty,
+    feedbackPenalty,
+  };
+};
+
 const computeSingleLookRerankScore = ({
   candidate,
   history,
@@ -4027,94 +4272,16 @@ const computeSingleLookRerankScore = ({
   userDirectives?: UserIntentDirectives | null;
   feedbackSignals?: SingleFeedbackSignals | null;
 }): number => {
-  let score = candidate.confidence;
-
-  const styleDirectiveFit = computeStyleDirectiveFit({
-    lineup: candidate.lineupGarments,
+  return computeSingleLookRerankBreakdown({
+    candidate,
+    history,
+    intent,
+    weatherContext,
+    weatherProfile,
+    derivedProfile,
     userDirectives,
-  });
-  score += styleDirectiveFit.score;
-
-  const matchingHistoryCount = history.filter((item) => item.signature === candidate.signature).length;
-  if (matchingHistoryCount > 0) {
-    score -= Math.min(48, matchingHistoryCount * 16);
-  }
-
-  const historyIds = history.map((item) => item.ids).filter((ids) => ids.length > 0);
-  const historyOverlap = historyIds.length > 0
-    ? maxOverlapAgainstHistory(candidate.selectedGarmentIds, historyIds)
-    : 0;
-  score -= Math.round(historyOverlap * 30);
-
-  if (feedbackSignals) {
-    if (feedbackSignals.penalizedSignatures.has(candidate.signature)) {
-      score -= 22;
-    }
-
-    const penalizedOverlapCount = candidate.selectedGarmentIds.filter((id) =>
-      feedbackSignals.penalizedGarmentIds.has(id)
-    ).length;
-    score -= Math.min(28, penalizedOverlapCount * 7);
-
-    const isWetContext = weatherProfile?.wetSurfaceRisk === "high" || weatherProfile?.wetSurfaceRisk === "medium";
-    if (isWetContext && (feedbackSignals.rainMismatchSignal || feedbackSignals.materialMismatchSignal)) {
-      let wetMaterialPenalty = 0;
-      for (const garment of candidate.lineupGarments) {
-        const category = categorizeType(garment.type);
-        if (category !== "outerwear" && category !== "footwear") continue;
-        const technicalShare = materialBucketShare(garment.material_composition, "technical");
-        const absorbentShare = materialBucketShare(garment.material_composition, "absorbent");
-        if (absorbentShare > 0.45 && technicalShare < 0.25) {
-          wetMaterialPenalty += 12;
-        }
-      }
-      score -= wetMaterialPenalty;
-    }
-
-    if (feedbackSignals.formalityMismatchSignal && derivedProfile?.formality) {
-      const mismatches = candidate.lineupGarments.filter(
-        (garment) => normalize(garment.formality).toLowerCase() !== derivedProfile.formality!.toLowerCase()
-      ).length;
-      score -= mismatches * 3;
-    }
-
-    if (feedbackSignals.styleMismatchSignal && (derivedProfile?.style.length ?? 0) > 0) {
-      const mismatches = candidate.lineupGarments.filter(
-        (garment) =>
-          !derivedProfile!.style.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase())
-      ).length;
-      score -= mismatches * 2;
-    }
-
-    if (feedbackSignals.timeMismatchSignal && intent.timeOfDay.length > 0) {
-      const mismatches = candidate.lineupGarments.filter(
-        (garment) =>
-          !Boolean(intersectionMatches(garment.suitable_time_of_day ?? [], intent.timeOfDay, { allDayAlias: "all day" }))
-      ).length;
-      score -= mismatches * 2;
-    }
-
-    if (feedbackSignals.materialMismatchSignal) {
-      const materialScores = candidate.lineupGarments.map((garment) =>
-        computeMaterialIntentScore({
-          materialComposition: garment.material_composition,
-          intent,
-          category: categorizeType(garment.type),
-          weatherContext,
-          weatherProfile,
-          derivedProfile,
-        })
-      );
-      const averageMaterialScore = materialScores.length > 0
-        ? materialScores.reduce((sum, value) => sum + value, 0) / materialScores.length
-        : 0;
-      if (averageMaterialScore < 0) {
-        score -= Math.round(Math.abs(averageMaterialScore));
-      }
-    }
-  }
-
-  return score;
+    feedbackSignals,
+  }).total;
 };
 
 const chooseTopSingleLookCandidate = ({
@@ -4182,7 +4349,11 @@ const chooseTopSingleLookCandidate = ({
   const ranked = pool
     .map((candidate) => ({
       candidate,
-      rerankScore: computeSingleLookRerankScore({
+      styleFit: computeStyleDirectiveFit({
+        lineup: candidate.lineupGarments,
+        userDirectives,
+      }),
+      rerankBreakdown: computeSingleLookRerankBreakdown({
         candidate,
         history,
         intent,
@@ -4194,7 +4365,15 @@ const chooseTopSingleLookCandidate = ({
       }),
     }))
     .sort((left, right) => {
-      if (right.rerankScore !== left.rerankScore) return right.rerankScore - left.rerankScore;
+      if (right.rerankBreakdown.total !== left.rerankBreakdown.total) {
+        return right.rerankBreakdown.total - left.rerankBreakdown.total;
+      }
+      if (right.styleFit.matchedUniqueStyleTagCount !== left.styleFit.matchedUniqueStyleTagCount) {
+        return right.styleFit.matchedUniqueStyleTagCount - left.styleFit.matchedUniqueStyleTagCount;
+      }
+      if (right.styleFit.styleCoverageRatio !== left.styleFit.styleCoverageRatio) {
+        return right.styleFit.styleCoverageRatio - left.styleFit.styleCoverageRatio;
+      }
       if (right.candidate.confidence !== left.candidate.confidence) {
         return right.candidate.confidence - left.candidate.confidence;
       }
@@ -6406,6 +6585,16 @@ export async function POST(request: Request) {
     logInfo(
       "[ai-look][single][step-2][selected]",
       {
+        rerankBreakdown: computeSingleLookRerankBreakdown({
+          candidate: selectedLook,
+          history: recentSingleHistory,
+          intent: canonicalIntent,
+          weatherContext: weatherContextSummary || null,
+          weatherProfile: canonicalWeatherProfile,
+          derivedProfile,
+          userDirectives,
+          feedbackSignals: singleFeedbackSignals,
+        }),
         signature: selectedLook.signature,
         confidence: selectedLook.confidence,
         repeatedFromHistory: recentSignatureSet.has(selectedLook.signature),

@@ -82,11 +82,14 @@ Use imperative commit subjects.
    - Single-look weather location resolution priority is `prompt location > profile default location > no-location fallback`; prompt date parsing is intentionally not used in single-look mode.
    - Single-look request payload now optionally accepts `selectedTools` (`[{ type: "style" | "reference", id: string }]`) from the AI Look `Add Tool` UI.
    - Directive merge precedence is deterministic: hard safety/context constraints first, then tool-selected directives, then free-text directives, then derived-profile fallback.
+   - Tool-selected formality bias now takes precedence over derived formality in single-look profile merge.
   - Style directives are sourced from DB-backed style catalog records (aliases + directive payload) rather than hardcoded runtime dictionaries.
   - Reference directives are sourced from DB-backed profile reference records (aliases + directive payload) rather than hardcoded runtime dictionaries.
 2. Single-look recommendation: Step 2 attempts up to six candidates and degrades gracefully when fewer valid candidates are returned. Candidates are wardrobe-ID-only, validated against DB IDs, normalized to exactly four pieces (`outerwear + top + bottom + footwear`), deduplicated by signature, and reranked with objective fit + model confidence + recency/overlap controls.
    - Single mode computes a structured deterministic weather profile (`tempBand`, `precipitation`, `wind`, `humidity`, `wetSurfaceRisk`, `confidence`) and a deterministic derived profile (`formality`, `style`, material targets).
    - Category-aware deterministic hard rules enforce weather and occasion/place compatibility per garment; wet-surface/material conflicts (especially outerwear/footwear) are hard-blocked.
+   - Single-look candidate selection keeps hard context/safety gates, while tool style/material intent is applied as soft rerank influence (not hard pre-rerank veto) to reduce side-effect regressions.
+   - Single-look rerank includes structured breakdown logging and applies mild penalties for missing tool-style coverage and tool material-avoid conflicts.
    - Single mode optionally accepts `anchorGarmentId` + `anchorMode` (`strict` or `soft`) to generate a look around a specific garment. Strict mode requires the anchor in the final lineup and returns 422 if impossible.
    - Final output returns exactly one look in single mode (`primaryLook`).
    - Single mode stores recent lineup signatures in DB table `ai_look_lineup_history`, applies hard no-repeat/no-high-overlap filtering when alternatives exist, and falls back to repeated signatures only when no viable alternative survives.
