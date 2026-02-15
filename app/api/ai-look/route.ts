@@ -246,6 +246,7 @@ interface CompactGarment {
   brand: string;
   type: string;
   style: string;
+  styles: string[];
   formality: string;
   material_composition: Garment["material_composition"];
   suitable_weather: string[];
@@ -363,6 +364,82 @@ const WEATHER_TOOL_INPUT_SCHEMA = z.object({
 }).strict();
 
 const normalize = (value: unknown): string => String(value ?? "").trim();
+
+const getGarmentStyleTags = (garment: { style?: string | null; styles?: string[] | null }): string[] =>
+  dedupeLowercase([
+    ...(Array.isArray(garment.styles) ? garment.styles : []),
+    normalize(garment.style),
+  ]);
+
+const IVY_SOFT_RELATED_STYLE_TAGS = ["preppy", "classic"];
+const IVY_OPPOSING_STYLE_TAGS = ["workwear", "outdoorsy", "western"];
+
+const hasStyleTag = (
+  garment: { style?: string | null; styles?: string[] | null },
+  styleTag: string
+): boolean => {
+  const normalized = normalize(styleTag).toLowerCase();
+  if (!normalized) return false;
+  return getGarmentStyleTags(garment).some((tag) => tag.toLowerCase() === normalized);
+};
+
+const hasAnyStyleTag = (
+  garment: { style?: string | null; styles?: string[] | null },
+  styleTags: string[]
+): boolean =>
+  styleTags.some((styleTag) => hasStyleTag(garment, styleTag));
+
+const garmentMatchesAnyStyleTag = (
+  garment: { style?: string | null; styles?: string[] | null },
+  styleTags: string[]
+): boolean => {
+  if (styleTags.length === 0) return false;
+  const normalizedRequested = dedupeLowercase(styleTags).map((style) => style.toLowerCase());
+  if (normalizedRequested.some((style) => hasStyleTag(garment, style))) return true;
+  if (normalizedRequested.includes("ivy") && hasAnyStyleTag(garment, IVY_SOFT_RELATED_STYLE_TAGS)) {
+    return true;
+  }
+  return false;
+};
+
+const garmentMatchesStyleForObjective = (
+  garment: { style?: string | null; styles?: string[] | null },
+  styleTags: string[]
+): boolean => {
+  const normalizedRequested = dedupeLowercase(styleTags).map((style) => style.toLowerCase());
+  if (normalizedRequested.length === 0) return false;
+
+  // For objective style-dimension matching, ivy intent requires exact ivy presence.
+  if (normalizedRequested.includes("ivy")) {
+    return hasStyleTag(garment, "ivy");
+  }
+
+  return garmentMatchesAnyStyleTag(garment, normalizedRequested);
+};
+
+const garmentMatchesStyleForDirective = (
+  garment: { style?: string | null; styles?: string[] | null },
+  styleTags: string[]
+): { fullMatch: boolean; partialMatch: boolean } => {
+  const normalizedRequested = dedupeLowercase(styleTags).map((style) => style.toLowerCase());
+  if (normalizedRequested.length === 0) {
+    return { fullMatch: false, partialMatch: false };
+  }
+
+  const hasIvyIntent = normalizedRequested.includes("ivy");
+  if (!hasIvyIntent) {
+    const fullMatch = garmentMatchesAnyStyleTag(garment, normalizedRequested);
+    return { fullMatch, partialMatch: false };
+  }
+
+  if (hasStyleTag(garment, "ivy")) {
+    return { fullMatch: true, partialMatch: false };
+  }
+  if (hasAnyStyleTag(garment, IVY_SOFT_RELATED_STYLE_TAGS)) {
+    return { fullMatch: false, partialMatch: true };
+  }
+  return { fullMatch: false, partialMatch: false };
+};
 
 const joinNaturalList = (values: string[]): string => {
   if (values.length === 0) return "";
@@ -1508,18 +1585,28 @@ const buildStyleDirectiveFromEntry = ({
   entry: StyleDirectiveCatalogEntry;
   sourceTerms: string[];
   confidence: DirectiveConfidence;
-}): UserStyleDirective => ({
-  key: entry.key,
-  sourceTerms: dedupeLowercase(sourceTerms),
-  canonicalStyleTags: toCanonicalStyleDirectiveTags(entry.styleTags),
-  silhouetteBiasTags: dedupeLowercase(entry.silhouetteTags),
-  materialBias: {
-    prefer: dedupeLowercase(entry.materialPrefer),
-    avoid: dedupeLowercase(entry.materialAvoid),
-  },
-  formalityBias: toCanonicalFormalityDirective(entry.formalityBias),
-  confidence,
-});
+}): UserStyleDirective => {
+  const baseTags = toCanonicalStyleDirectiveTags(entry.styleTags);
+  const normalizedEntryKey = normalize(entry.key).toLowerCase();
+  const normalizedCanonicalStyle = normalize(entry.canonicalStyle).toLowerCase();
+  const canonicalStyleTags =
+    normalizedEntryKey === "ivy" || normalizedCanonicalStyle === "ivy"
+      ? dedupeLowercase(["ivy", ...baseTags])
+      : baseTags;
+
+  return {
+    key: entry.key,
+    sourceTerms: dedupeLowercase(sourceTerms),
+    canonicalStyleTags,
+    silhouetteBiasTags: dedupeLowercase(entry.silhouetteTags),
+    materialBias: {
+      prefer: dedupeLowercase(entry.materialPrefer),
+      avoid: dedupeLowercase(entry.materialAvoid),
+    },
+    formalityBias: toCanonicalFormalityDirective(entry.formalityBias),
+    confidence,
+  };
+};
 
 const buildReferenceDirectiveFromEntry = ({
   entry,
@@ -1772,7 +1859,7 @@ const computeStyleDirectiveFit = ({
   lineup,
   userDirectives,
 }: {
-  lineup: Array<Pick<Garment, "style" | "formality" | "material_composition">>;
+  lineup: Array<Pick<Garment, "style" | "styles" | "formality" | "material_composition">>;
   userDirectives?: UserIntentDirectives | null;
 }): StyleDirectiveFit => {
   const requestedStyleTags = userDirectives?.merged.styleTagsPrefer ?? [];
@@ -1815,12 +1902,36 @@ const computeStyleDirectiveFit = ({
   const styleTagHitCounts = new Map<string, number>();
 
   for (const garment of lineup) {
-    const garmentStyle = normalize(garment.style).toLowerCase();
-    if (garmentStyle && requestedSet.has(garmentStyle)) {
+    const garmentStyleTags = getGarmentStyleTags(garment);
+    let matchedThisGarment = false;
+    for (const garmentStyle of garmentStyleTags) {
+      const garmentStyleLower = garmentStyle.toLowerCase();
+      if (requestedSet.has(garmentStyleLower)) {
+        matchedThisGarment = true;
+        styleTagHitCounts.set(garmentStyleLower, (styleTagHitCounts.get(garmentStyleLower) ?? 0) + 1);
+      }
+    }
+    if (matchedThisGarment) {
       styleMatchCount += 1;
       // Reward per-garment adherence, but put more emphasis on unique requested-tag coverage below.
       score += 5;
-      styleTagHitCounts.set(garmentStyle, (styleTagHitCounts.get(garmentStyle) ?? 0) + 1);
+    }
+
+    if (requestedSet.has("ivy")) {
+      const hasIvy = garmentStyleTags.some((tag) => tag.toLowerCase() === "ivy");
+      if (hasIvy) {
+        score += 6;
+      } else if (garmentStyleTags.some((tag) => IVY_SOFT_RELATED_STYLE_TAGS.includes(tag.toLowerCase()))) {
+        // Soft fallback for ivy when exact-tag coverage is scarce.
+        score += 2;
+      }
+
+      const hasOpposingRuggedStyle = garmentStyleTags.some((tag) =>
+        IVY_OPPOSING_STYLE_TAGS.includes(tag.toLowerCase())
+      );
+      if (hasOpposingRuggedStyle && !hasIvy) {
+        score -= 6;
+      }
     }
 
     const materials = (garment.material_composition ?? []).map((entry) => normalize(entry.material).toLowerCase());
@@ -2425,6 +2536,7 @@ const deriveStylingFromContext = ({
     addFormality("Business Formal", 8);
     addFormality("Formal", 2);
     addStyle("classic", 4);
+    addStyle("ivy", 2);
     addStyle("minimalist", 2);
   }
   if (occasionSet.has("date night / intimate dinner")) {
@@ -2461,6 +2573,7 @@ const deriveStylingFromContext = ({
   if (placeSet.has("office / boardroom")) {
     addFormality("Business Formal", 5);
     addFormality("Business Casual", 4);
+    addStyle("ivy", 5);
     addStyle("classic", 3);
     addStyle("minimalist", 3);
     addStyle("preppy", 2);
@@ -2486,6 +2599,7 @@ const deriveStylingFromContext = ({
   if (placeSet.has("metropolitan / city")) {
     addFormality("Elevated Casual", 3);
     addFormality("Business Casual", 2);
+    addStyle("ivy", 1);
     addStyle("minimalist", 3);
     addStyle("classic", 2);
   }
@@ -2849,6 +2963,7 @@ const scoreGarmentForIntent = (
     weatherProfile?: WeatherProfile | null;
     derivedProfile?: DerivedProfile | null;
     userDirectives?: UserIntentDirectives | null;
+    travelReason?: "Vacation" | "Office" | "Customer visit" | null;
   }
 ): number => {
   const category = categorizeType(garment.type);
@@ -2877,8 +2992,21 @@ const scoreGarmentForIntent = (
   if (intent.formality && normalize(garment.formality).toLowerCase() === intent.formality.toLowerCase()) {
     score += 8;
   }
-  if (intent.style.length > 0 && intent.style.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase())) {
-    score += 6;
+  if (intent.style.length > 0) {
+    if (garmentMatchesStyleForObjective(garment, intent.style)) {
+      score += 6;
+    }
+    const hasIvyIntent = intent.style.some((style) => normalize(style).toLowerCase() === "ivy");
+    if (hasIvyIntent) {
+      if (hasStyleTag(garment, "ivy")) {
+        score += 6;
+      } else if (hasAnyStyleTag(garment, IVY_SOFT_RELATED_STYLE_TAGS)) {
+        score += 2;
+      }
+      if (hasAnyStyleTag(garment, IVY_OPPOSING_STYLE_TAGS) && !hasStyleTag(garment, "ivy")) {
+        score -= 8;
+      }
+    }
   }
   score += computeMaterialIntentScore({
     materialComposition: garment.material_composition,
@@ -2891,10 +3019,11 @@ const scoreGarmentForIntent = (
 
   const directiveStyles = options?.userDirectives?.merged.styleTagsPrefer ?? [];
   if (directiveStyles.length > 0) {
-    const styleSet = new Set(directiveStyles.map((style) => style.toLowerCase()));
-    const garmentStyle = normalize(garment.style).toLowerCase();
-    if (garmentStyle && styleSet.has(garmentStyle)) {
+    const directiveStyleMatch = garmentMatchesStyleForDirective(garment, directiveStyles);
+    if (directiveStyleMatch.fullMatch) {
       score += 8;
+    } else if (directiveStyleMatch.partialMatch) {
+      score += 3;
     } else {
       score -= 2;
     }
@@ -2909,6 +3038,32 @@ const scoreGarmentForIntent = (
     }
   }
 
+  const ivyRequestedByDirectives =
+    directiveStyles.some((style) => normalize(style).toLowerCase() === "ivy");
+  if (ivyRequestedByDirectives) {
+    if (hasStyleTag(garment, "ivy")) {
+      score += 5;
+    } else if (hasAnyStyleTag(garment, IVY_SOFT_RELATED_STYLE_TAGS)) {
+      score += 2;
+    }
+    if (hasAnyStyleTag(garment, IVY_OPPOSING_STYLE_TAGS) && !hasStyleTag(garment, "ivy")) {
+      score -= 7;
+    }
+  }
+
+  const travelReason = options?.travelReason ?? null;
+  const hasIvySignal =
+    intent.style.some((style) => normalize(style).toLowerCase() === "ivy") || ivyRequestedByDirectives;
+  if (travelReason && hasIvySignal) {
+    if (travelReason === "Office" || travelReason === "Customer visit") {
+      if (hasStyleTag(garment, "ivy")) score += 10;
+      else if (hasAnyStyleTag(garment, IVY_SOFT_RELATED_STYLE_TAGS)) score += 4;
+    } else if (travelReason === "Vacation") {
+      if (hasStyleTag(garment, "ivy")) score += 3;
+      else if (hasAnyStyleTag(garment, IVY_SOFT_RELATED_STYLE_TAGS)) score += 1;
+    }
+  }
+
   return score;
 };
 
@@ -2920,7 +3075,7 @@ const buildLineupRuleTrace = ({
   derivedProfile,
   userDirectives,
 }: {
-  lineup: Array<Pick<Garment, "id" | "type" | "model" | "features" | "suitable_weather" | "suitable_occasions" | "suitable_places" | "suitable_time_of_day" | "formality" | "style" | "material_composition">>;
+  lineup: Array<Pick<Garment, "id" | "type" | "model" | "features" | "suitable_weather" | "suitable_occasions" | "suitable_places" | "suitable_time_of_day" | "formality" | "style" | "styles" | "material_composition">>;
   intent: CanonicalIntent;
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
@@ -2953,10 +3108,11 @@ const buildLineupRuleTrace = ({
       derivedProfile,
     });
     const directiveStyles = userDirectives?.merged.styleTagsPrefer ?? [];
+    const directiveStyleEvaluation = garmentMatchesStyleForDirective(garment, directiveStyles);
     const directiveStyleMatch =
       directiveStyles.length === 0
         ? null
-        : directiveStyles.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase());
+        : directiveStyleEvaluation.fullMatch || directiveStyleEvaluation.partialMatch;
     const directiveFit = computeStyleDirectiveFit({
       lineup: [garment],
       userDirectives,
@@ -2980,7 +3136,7 @@ const buildLineupRuleTrace = ({
         !intent.formality || normalize(garment.formality).toLowerCase() === intent.formality.toLowerCase(),
       styleMatch:
         intent.style.length === 0 ||
-        intent.style.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase()),
+        garmentMatchesStyleForObjective(garment, intent.style),
       directiveStyleMatch,
       directiveStyleFitScore: directiveFit.score,
       materialScore,
@@ -2990,6 +3146,7 @@ const buildLineupRuleTrace = ({
 const buildTravelPromptWardrobe = ({
   eligibleWardrobe,
   dayIntent,
+  travelReason,
   weatherContext,
   weatherProfile,
   derivedProfile,
@@ -2999,6 +3156,7 @@ const buildTravelPromptWardrobe = ({
 }: {
   eligibleWardrobe: CompactGarment[];
   dayIntent: CanonicalIntent;
+  travelReason?: "Vacation" | "Office" | "Customer visit" | null;
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
@@ -3009,6 +3167,7 @@ const buildTravelPromptWardrobe = ({
   const recentIds = new Set(recentLookHistory.flatMap((item) => item.ids));
   const scored = eligibleWardrobe.map((garment) => {
     const intentScore = scoreGarmentForIntent(garment, dayIntent, {
+      travelReason,
       weatherContext,
       weatherProfile,
       derivedProfile,
@@ -3079,6 +3238,7 @@ const enforceCoreSilhouetteFromPool = ({
   weatherProfile,
   derivedProfile,
   userDirectives,
+  travelReason,
   requiredCategories = CORE_SILHOUETTE_CATEGORIES,
 }: {
   ids: number[];
@@ -3094,6 +3254,7 @@ const enforceCoreSilhouetteFromPool = ({
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
   userDirectives?: UserIntentDirectives | null;
+  travelReason?: "Vacation" | "Office" | "Customer visit" | null;
   requiredCategories?: GarmentCategory[];
 }): number[] => {
   const blockedIdSet = new Set(blockedIds);
@@ -3108,12 +3269,14 @@ const enforceCoreSilhouetteFromPool = ({
 
   const candidateSort = (left: CompactGarment, right: CompactGarment) => {
     const leftScore = scoreGarmentForIntent(left, intent, {
+      travelReason,
       weatherContext,
       weatherProfile,
       derivedProfile,
       userDirectives,
     }) + (usedGarmentIds.has(left.id) ? 0 : 25) + (left.favorite ? 5 : 0);
     const rightScore = scoreGarmentForIntent(right, intent, {
+      travelReason,
       weatherContext,
       weatherProfile,
       derivedProfile,
@@ -3168,6 +3331,7 @@ const diversifyLineupFromPool = ({
   weatherProfile,
   derivedProfile,
   userDirectives,
+  travelReason,
   requiredCategories = CORE_SILHOUETTE_CATEGORIES,
 }: {
   ids: number[];
@@ -3187,6 +3351,7 @@ const diversifyLineupFromPool = ({
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
   userDirectives?: UserIntentDirectives | null;
+  travelReason?: "Vacation" | "Office" | "Customer visit" | null;
   requiredCategories?: GarmentCategory[];
 }): number[] => {
   const historyIds = [
@@ -3252,12 +3417,14 @@ const diversifyLineupFromPool = ({
       })
       .sort((left, right) => {
         const leftScore = scoreGarmentForIntent(left, intent, {
+          travelReason,
           weatherContext,
           weatherProfile,
           derivedProfile,
           userDirectives,
         }) + (usedGarmentIds.has(left.id) ? 0 : 30) + (left.favorite ? 5 : 0);
         const rightScore = scoreGarmentForIntent(right, intent, {
+          travelReason,
           weatherContext,
           weatherProfile,
           derivedProfile,
@@ -3293,6 +3460,7 @@ const normalizeToFixedCategoryLook = ({
   weatherProfile,
   derivedProfile,
   userDirectives,
+  travelReason,
   requiredCategories,
   recentUsedIds,
   anchorGarmentId,
@@ -3307,6 +3475,7 @@ const normalizeToFixedCategoryLook = ({
   weatherProfile?: WeatherProfile | null;
   derivedProfile?: DerivedProfile | null;
   userDirectives?: UserIntentDirectives | null;
+  travelReason?: "Vacation" | "Office" | "Customer visit" | null;
   requiredCategories: GarmentCategory[];
   recentUsedIds?: Set<number>;
   anchorGarmentId?: number | null;
@@ -3335,6 +3504,7 @@ const normalizeToFixedCategoryLook = ({
     weatherProfile,
     derivedProfile,
     userDirectives,
+    travelReason,
     requiredCategories,
   });
 
@@ -3386,6 +3556,7 @@ const normalizeToFixedCategoryLook = ({
           : 0;
         const score =
           scoreGarmentForIntent(garment, intent, {
+            travelReason,
             weatherContext,
             weatherProfile,
             derivedProfile,
@@ -3479,7 +3650,7 @@ const computeObjectiveMatchScore = (
   }
 
   if (intent.style.length > 0) {
-    const styleMatches = lineup.map((garment) => intent.style.some((style) => style.toLowerCase() === garment.style?.toLowerCase()));
+    const styleMatches = lineup.map((garment) => garmentMatchesStyleForObjective(garment, intent.style));
     dimensionScores.push(ratioScore(styleMatches));
   }
 
@@ -3775,7 +3946,7 @@ const FEEDBACK_MATERIAL_REGEX =
 const FEEDBACK_FORMALITY_REGEX =
   /\b(formality|too formal|too casual|dressy|underdressed|overdressed|formal|casual)\b/;
 const FEEDBACK_STYLE_REGEX =
-  /\b(style|vibe|aesthetic|silhouette|fit|theme|look|minimalist|classic|sporty|workwear|vintage|western|outdoorsy)\b/;
+  /\b(style|vibe|aesthetic|silhouette|fit|theme|look|minimalist|classic|preppy|ivy|sporty|workwear|vintage|western|outdoorsy)\b/;
 const FEEDBACK_TIME_REGEX =
   /\b(time|timing|all day|morning|afternoon|evening|night|daytime)\b/;
 
@@ -4066,11 +4237,13 @@ const getToolStyleTagGroups = (userDirectives?: UserIntentDirectives | null): st
 };
 
 const countCoveredToolStyleGroups = (
-  lineup: Array<Pick<Garment, "style">>,
+  lineup: Array<Pick<Garment, "style" | "styles">>,
   toolStyleTagGroups: string[][]
 ): number => {
   if (toolStyleTagGroups.length === 0) return 0;
-  const lineupStyles = new Set(lineup.map((garment) => normalize(garment.style).toLowerCase()).filter(Boolean));
+  const lineupStyles = new Set(
+    lineup.flatMap((garment) => getGarmentStyleTags(garment).map((style) => style.toLowerCase()))
+  );
   return toolStyleTagGroups.filter((group) =>
     group.some((tag) => lineupStyles.has(normalize(tag).toLowerCase()))
   ).length;
@@ -4198,8 +4371,7 @@ const computeSingleLookRerankBreakdown = ({
 
     if (feedbackSignals.styleMismatchSignal && (derivedProfile?.style.length ?? 0) > 0) {
       const mismatches = candidate.lineupGarments.filter(
-        (garment) =>
-          !derivedProfile!.style.some((style) => style.toLowerCase() === normalize(garment.style).toLowerCase())
+        (garment) => !garmentMatchesAnyStyleTag(garment, derivedProfile!.style)
       ).length;
       feedbackPenalty += mismatches * 2;
     }
@@ -4608,6 +4780,7 @@ export async function POST(request: Request) {
       brand: garment.brand,
       type: garment.type,
       style: garment.style,
+      styles: getGarmentStyleTags(garment),
       formality: garment.formality,
       material_composition: garment.material_composition,
       suitable_weather: garment.suitable_weather,
@@ -5017,12 +5190,12 @@ export async function POST(request: Request) {
           leftRainReadyScore +
           (left.favorite ? 6 : 0) +
           (tripDerivedStyling.formality && normalize(left.formality).toLowerCase() === tripDerivedStyling.formality.toLowerCase() ? 8 : 0) +
-          (tripDerivedStyling.style.some((style) => normalize(left.style).toLowerCase() === style.toLowerCase()) ? 8 : 0);
+          (garmentMatchesAnyStyleTag(left, tripDerivedStyling.style) ? 8 : 0);
         const rightScore =
           rightRainReadyScore +
           (right.favorite ? 6 : 0) +
           (tripDerivedStyling.formality && normalize(right.formality).toLowerCase() === tripDerivedStyling.formality.toLowerCase() ? 8 : 0) +
-          (tripDerivedStyling.style.some((style) => normalize(right.style).toLowerCase() === style.toLowerCase()) ? 8 : 0);
+          (garmentMatchesAnyStyleTag(right, tripDerivedStyling.style) ? 8 : 0);
         return rightScore - leftScore || left.id - right.id;
       });
 
@@ -5232,6 +5405,7 @@ export async function POST(request: Request) {
         const promptWardrobe = buildTravelPromptWardrobe({
           eligibleWardrobe,
           dayIntent,
+          travelReason: reason,
           weatherContext: dayWeather.summary,
           weatherProfile: dayWeather.weatherProfile,
           derivedProfile: dayDerivedProfile,
@@ -5418,6 +5592,7 @@ export async function POST(request: Request) {
             weatherContext: dayWeather.summary,
             weatherProfile: dayWeather.weatherProfile,
             derivedProfile: dayDerivedProfile,
+            travelReason: reason,
             requiredCategories: TRAVEL_REQUIRED_CATEGORIES,
           });
 
@@ -5438,6 +5613,7 @@ export async function POST(request: Request) {
             weatherContext: dayWeather.summary,
             weatherProfile: dayWeather.weatherProfile,
             derivedProfile: dayDerivedProfile,
+            travelReason: reason,
             requiredCategories: TRAVEL_REQUIRED_CATEGORIES,
           });
 

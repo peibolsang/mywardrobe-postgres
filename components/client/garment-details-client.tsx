@@ -80,6 +80,9 @@ export default function GarmentDetailsClient({
   const router = useRouter();
   const pathname = usePathname();
   const schemaProperties = schema.items.properties;
+  const garmentStyles = Array.isArray(garment.styles) && garment.styles.length > 0
+    ? garment.styles
+    : (garment.style ? [garment.style] : []);
 
   useEffect(() => {
     const wasUpdated = searchParams.get('updated') === '1';
@@ -149,9 +152,11 @@ export default function GarmentDetailsClient({
 
   const handleFindMatchingPieces = () => {
     const params = new URLSearchParams();
-    const trimmedStyle = garment.style?.trim();
-    if (trimmedStyle) {
-      params.append('style', trimmedStyle);
+    for (const style of garmentStyles) {
+      const trimmedStyle = style.trim();
+      if (trimmedStyle) {
+        params.append('style', trimmedStyle);
+      }
     }
     const topMaterial = [...(garment.material_composition ?? [])]
       .sort((a, b) => b.percentage - a.percentage)[0]?.material?.trim();
@@ -581,9 +586,20 @@ export default function GarmentDetailsClient({
               )}
             </div>
             <div className="flex flex-wrap gap-2">
-              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">
-                {garment.style || 'Style N/A'}
-              </span>
+              {garmentStyles.length > 0 ? (
+                garmentStyles.map((style, index) => (
+                  <span
+                    key={`${style}-${index}`}
+                    className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900"
+                  >
+                    {style}
+                  </span>
+                ))
+              ) : (
+                <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900">
+                  Style N/A
+                </span>
+              )}
               <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-900">
                 {garment.formality || 'Formality N/A'}
               </span>
@@ -627,7 +643,7 @@ export default function GarmentDetailsClient({
               <CardContent className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <Label className="text-xs uppercase tracking-wide text-slate-500">Style</Label>
-                  <p className="text-slate-900">{garment.style || 'Not set yet'}</p>
+                  <p className="text-slate-900">{garmentStyles.length > 0 ? garmentStyles.join(", ") : 'Not set yet'}</p>
                 </div>
                 <div>
                   <Label className="text-xs uppercase tracking-wide text-slate-500">Formality</Label>

@@ -209,6 +209,7 @@ export default function EditorForm({
       brand: '',
       type: '',
       style: '',
+      styles: [],
       formality: '',
       material_composition: [],
       color_palette: [],
@@ -234,6 +235,12 @@ export default function EditorForm({
       setFormData({
         ...currentGarment,
         favorite: Boolean(currentGarment.favorite),
+        style: Array.isArray(currentGarment.styles) && currentGarment.styles.length > 0
+          ? currentGarment.styles[0]
+          : (currentGarment.style || ''),
+        styles: Array.isArray(currentGarment.styles) && currentGarment.styles.length > 0
+          ? currentGarment.styles
+          : (currentGarment.style ? [currentGarment.style] : []),
         material_composition: filteredMaterialComposition,
         // Ensure other array fields are arrays
         color_palette: Array.isArray(currentGarment.color_palette) ? currentGarment.color_palette : [],
@@ -299,20 +306,25 @@ export default function EditorForm({
       const styleOptions = schemaData.items.properties?.style?.enum ?? [];
       const formalityOptions = schemaData.items.properties?.formality?.enum ?? [];
 
-      const canonicalStyle = resolveCanonicalEnumValue(prevData.style, styleOptions);
+      const canonicalStyles = (Array.isArray(prevData.styles) ? prevData.styles : [])
+        .map((style) => resolveCanonicalEnumValue(style, styleOptions))
+        .filter(Boolean);
       const canonicalFormality = resolveCanonicalEnumValue(prevData.formality, formalityOptions);
 
-      if (canonicalStyle === prevData.style && canonicalFormality === prevData.formality) {
+      const unchangedStyles = canonicalStyles.length === (prevData.styles?.length ?? 0) &&
+        canonicalStyles.every((style, index) => style === prevData.styles[index]);
+      if (unchangedStyles && canonicalFormality === prevData.formality) {
         return prevData;
       }
 
       return {
         ...prevData,
-        style: canonicalStyle,
+        styles: canonicalStyles,
+        style: canonicalStyles[0] ?? '',
         formality: canonicalFormality,
       };
     });
-  }, [isNewGarmentMode, schemaData, formData?.style, formData?.formality]);
+  }, [isNewGarmentMode, schemaData, formData?.styles, formData?.formality]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -370,6 +382,13 @@ export default function EditorForm({
   const handleMultiSelectChange = (name: string, values: string[]) => {
     setFormData((prevData) => {
       if (!prevData) return null;
+      if (name === 'style') {
+        return {
+          ...prevData,
+          styles: values,
+          style: values[0] ?? '',
+        };
+      }
       return {
         ...prevData,
         [name]: values,
@@ -426,7 +445,7 @@ export default function EditorForm({
     // Create a new FormData object for the update action
     const updateFormData = new FormData();
     for (const key in updatedFormData) {
-      if (key === 'material_composition' || key === 'color_palette' || key === 'suitable_weather' || key === 'suitable_time_of_day' || key === 'suitable_places' || key === 'suitable_occasions') {
+      if (key === 'material_composition' || key === 'color_palette' || key === 'suitable_weather' || key === 'suitable_time_of_day' || key === 'suitable_places' || key === 'suitable_occasions' || key === 'styles') {
         updateFormData.append(key, JSON.stringify((updatedFormData as any)[key]));
       } else if (key === 'file_name') {
         // If file_name is a URL, we need to pass it as a string, not a File object
@@ -472,6 +491,13 @@ export default function EditorForm({
 
     requiredFields.forEach(key => {
       const value = (data as any)[key];
+      if (key === 'style') {
+        const styleValues = Array.isArray(data.styles) ? data.styles : (data.style ? [data.style] : []);
+        if (styleValues.length === 0) {
+          errors[key] = 'Select at least one style';
+        }
+        return;
+      }
       if (key === 'file_name') {
         const hasExistingFileName = typeof value === 'string' && value.trim() !== '';
         const hasSelectedFile = Boolean(inputFileRef.current?.files?.length);
@@ -594,6 +620,20 @@ export default function EditorForm({
                 placeholder={placeholderText}
                 searchPlaceholder="Search or create garment type..."
                 className={hasError ? 'border-red-500' : ''}
+              />
+              {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
+            </>
+          );
+        } else if (key === 'style' && prop.enum) {
+          const selectedStyles = Array.isArray(currentGarment?.styles) ? currentGarment.styles : [];
+          return (
+            <>
+              <Label htmlFor={key} className={labelClassName}>{labelText}</Label>
+              <MultiSelect
+                options={prop.enum as string[]}
+                selected={selectedStyles}
+                onChange={(selectedValues) => handleMultiSelectChange(key, selectedValues)}
+                placeholder={placeholderText}
               />
               {hasError && <p className="text-red-500 text-sm mt-1">{hasError}</p>}
             </>
@@ -875,7 +915,8 @@ export default function EditorForm({
             <input type="hidden" name="suitablePlaces" value={JSON.stringify(currentGarment.suitable_places)} />
             <input type="hidden" name="suitableOccasions" value={JSON.stringify(currentGarment.suitable_occasions)} />
             <input type="hidden" name="materials" value={JSON.stringify(currentGarment.material_composition.map(m => ({ material: m.material, percentage: m.percentage })))} />
-            <input type="hidden" name="style" value={currentGarment.style || ''} />
+            <input type="hidden" name="styles" value={JSON.stringify(currentGarment.styles || [])} />
+            <input type="hidden" name="style" value={currentGarment.styles?.[0] || currentGarment.style || ''} />
             <input type="hidden" name="formality" value={currentGarment.formality || ''} />
 
             <div className="space-y-4">
@@ -897,7 +938,7 @@ export default function EditorForm({
                   <CardTitle>Style & Formality</CardTitle>
                 </CardHeader>
                 <CardContent className="grid gap-4 sm:grid-cols-2">
-                  <div>{renderInputField('style', schemaProperties.style, currentGarment.style)}</div>
+                  <div>{renderInputField('style', schemaProperties.style, currentGarment.styles || [])}</div>
                   <div>{renderInputField('formality', schemaProperties.formality, currentGarment.formality)}</div>
                 </CardContent>
               </Card>

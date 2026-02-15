@@ -33,6 +33,7 @@ interface Garment {
   brand: string;
   type: string;
   style: string;
+  styles: string[];
   formality: string;
   material_composition: any[]; // Simplified for viewer
   color_palette: string[];
@@ -485,7 +486,12 @@ export default function WardrobeViewerClient({
       const matchesBrand = selectedFilters.brand.length === 0 || selectedFilters.brand.includes(garment.brand);
       const matchesType = selectedFilters.type.length === 0 || selectedFilters.type.includes(garment.type);
       const matchesColor = selectedFilters.color_palette.length === 0 || selectedFilters.color_palette.some(color => garment.color_palette.includes(color));
-      const matchesStyle = selectedFilters.style.length === 0 || selectedFilters.style.includes(garment.style);
+      const garmentStyles = Array.isArray(garment.styles) && garment.styles.length > 0
+        ? garment.styles
+        : (garment.style ? [garment.style] : []);
+      const matchesStyle =
+        selectedFilters.style.length === 0 ||
+        selectedFilters.style.some((style) => garmentStyles.includes(style));
       const matchesMaterial = selectedFilters.material.length === 0 || selectedFilters.material.some(material => garment.material_composition.some(mc => mc.material === material));
       return matchesBrand && matchesType && matchesColor && matchesStyle && matchesMaterial;
     });

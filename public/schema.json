@@ -22,7 +22,7 @@
       "style": {
         "type": "string",
         "description": "The aesthetic style of the garment (e.g., 'casual', 'formal', 'sporty', 'vintage', 'bohemian').",
-        "enum": ["sporty", "minimalist", "preppy", "mod", "workwear", "outdoorsy", "vintage", "western", "classic"]
+        "enum": ["sporty", "minimalist", "preppy", "ivy", "mod", "workwear", "outdoorsy", "vintage", "western", "classic"]
       },
       "formality": {
         "type": "string",

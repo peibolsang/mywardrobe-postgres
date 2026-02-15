@@ -58,7 +58,7 @@ VALUES
   ('amekaji', 'Amekaji', 'vintage', 'Japanese Americana with rugged casual textures and layering.', TRUE),
   ('workwear', 'Workwear', 'workwear', 'Utility-first workwear language with durable heritage materials.', TRUE),
   ('military_heritage', 'Military Heritage', 'workwear', 'Military-inspired heritage silhouettes and rugged classics.', TRUE),
-  ('ivy', 'Ivy / Trad', 'classic', 'Collegiate and traditional menswear proportions with clean structure.', TRUE),
+  ('ivy', 'Ivy / Trad', 'ivy', 'Collegiate and traditional menswear proportions with clean structure.', TRUE),
   ('soft_tailoring', 'Soft Tailoring', 'classic', 'Unstructured tailoring with artisanal and refined fabric direction.', TRUE),
   ('elevated_slouch', 'Elevated Slouch', 'minimalist', 'Relaxed, high-low styling with textural modern balance.', TRUE)
 ON CONFLICT (key)
@@ -121,7 +121,7 @@ JOIN (
     ),
     (
       'ivy',
-      '["academic","classic","preppy","conservative"]',
+      '["ivy","preppy","classic"]',
       '["natural shoulder","tapered","tailored"]',
       '["oxford cloth","shetland wool","cotton twill","seersucker"]',
       '["technical fabrics","synthetic blends"]',
@@ -200,6 +200,10 @@ JOIN (
     ('military_heritage', 'heritage vibe'),
 
     ('ivy', 'ivy league'),
+    ('ivy', 'ivy'),
+    ('ivy', 'ivy style'),
+    ('ivy', 'ivy trad'),
+    ('ivy', 'ivy/trad'),
     ('ivy', 'trad'),
     ('ivy', 'soft prep'),
     ('ivy', 'collegiate'),

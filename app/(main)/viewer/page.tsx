@@ -101,7 +101,15 @@ export default async function WardrobeViewerPage({
     const uniqueBrands = Array.from(new Set(wardrobeJson.map((g) => g.brand).filter(isNonEmptyString)));
     const uniqueTypes = Array.from(new Set(wardrobeJson.map((g) => g.type).filter(isNonEmptyString)));
     const uniqueColors = Array.from(new Set(wardrobeJson.flatMap((g) => g.color_palette).filter(isNonEmptyString)));
-    const uniqueStyles = Array.from(new Set(wardrobeJson.map((g) => g.style).filter(isNonEmptyString)));
+    const uniqueStyles = Array.from(
+      new Set(
+        wardrobeJson.flatMap((g) => {
+          const styles = Array.isArray(g.styles) ? g.styles : [];
+          if (styles.length > 0) return styles;
+          return isNonEmptyString(g.style) ? [g.style] : [];
+        }).filter(isNonEmptyString)
+      )
+    );
     const uniqueMaterials = Array.from(
       new Set(
         wardrobeJson
@@ -131,8 +139,13 @@ export default async function WardrobeViewerPage({
     }, {} as Record<string, number>);
 
     const styleCounts = wardrobeJson.reduce((acc, garment) => {
-      if (!isNonEmptyString(garment.style)) return acc;
-      acc[garment.style] = (acc[garment.style] || 0) + 1;
+      const styleValues = Array.isArray(garment.styles) && garment.styles.length > 0
+        ? garment.styles
+        : (isNonEmptyString(garment.style) ? [garment.style] : []);
+      styleValues.forEach((style) => {
+        if (!isNonEmptyString(style)) return;
+        acc[style] = (acc[style] || 0) + 1;
+      });
       return acc;
     }, {} as Record<string, number>);
 

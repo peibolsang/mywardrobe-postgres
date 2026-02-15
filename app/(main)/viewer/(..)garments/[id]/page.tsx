@@ -13,10 +13,23 @@ async function getGarment(id: string): Promise<Garment | null> {
       g.model,
       g.brand,
       t.name AS type,
+      COALESCE(s.name, '') AS style,
+      COALESCE(
+        (
+          SELECT json_agg(s2.name ORDER BY s2.name)
+          FROM garment_style gs2
+          JOIN styles s2 ON s2.id = gs2.style_id
+          WHERE gs2.garment_id = g.id
+        ),
+        CASE WHEN s.name IS NOT NULL THEN json_build_array(s.name) ELSE '[]'::json END
+      ) AS styles,
+      COALESCE(f.name, '') AS formality,
       g.features,
       g.favorite
     FROM garments g
     LEFT JOIN types t ON g.type_id = t.id
+    LEFT JOIN styles s ON g.style_id = s.id
+    LEFT JOIN formalities f ON g.formality_id = f.id
     WHERE g.id = ${id}
   `;
   return (garments[0] as Garment) || null;

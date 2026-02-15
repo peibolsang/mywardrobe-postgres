@@ -4,6 +4,7 @@ import { neon } from '@neondatabase/serverless';
 import { revalidateTag } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { isOwnerSession } from '@/lib/owner';
+import schema from '@/public/schema.json';
 import 'server-only';
 
 // ─────────────────────────────────────────────────────────────
@@ -23,6 +24,18 @@ type MaterialInput = { material: string; percentage: number };
 type MaterialToInsert = { id: number; percentage: number };
 type TypeLookupResult = { id: number } | null;
 type LookupIdResult = { id: number } | null;
+
+type SchemaItems = {
+  properties?: {
+    style?: { enum?: string[] };
+  };
+};
+
+const SCHEMA_ITEMS = (schema?.items ?? {}) as SchemaItems;
+const SCHEMA_STYLE_OPTIONS = (SCHEMA_ITEMS.properties?.style?.enum ?? [])
+  .map((value) => String(value ?? '').trim().toLowerCase())
+  .filter(Boolean);
+const SCHEMA_HAS_IVY_STYLE = SCHEMA_STYLE_OPTIONS.includes('ivy');
 
 function normalizeLookupValues(values: string[]): string[] {
   const seen = new Set<string>();
@@ -179,19 +192,52 @@ async function resolveTypeId(sql: any, typeName: string): Promise<TypeLookupResu
   return { id: insertedOrExistingType[0].id };
 }
 
-async function resolveStyleId(sql: any, styleName: string): Promise<LookupIdResult> {
-  const normalizedStyleName = String(styleName ?? '').trim();
-  if (!normalizedStyleName) return null;
+async function resolveStyleIds(
+  sql: any,
+  styleNames: string[]
+): Promise<{ ids: number[]; missing: string[] }> {
+  const normalizedStyleNames = normalizeLookupValues(styleNames);
+  if (normalizedStyleNames.length === 0) {
+    return { ids: [], missing: [] };
+  }
 
-  const existingStyle = await sql`
-    SELECT id
+  const existingStyles = await sql`
+    SELECT id, LOWER(name) AS normalized_name
     FROM styles
-    WHERE LOWER(name) = LOWER(${normalizedStyleName})
-    LIMIT 1
+    WHERE LOWER(name) = ANY(${normalizedStyleNames})
   ` as any[];
 
-  if (existingStyle.length === 0) return null;
-  return { id: existingStyle[0].id };
+  const idByName = new Map(existingStyles.map((row: any) => [row.normalized_name, row.id]));
+  const ids: number[] = [];
+  const missing: string[] = [];
+
+  for (const styleName of normalizedStyleNames) {
+    const styleId = idByName.get(styleName);
+    if (typeof styleId === 'number') {
+      ids.push(styleId);
+    } else {
+      missing.push(styleName);
+    }
+  }
+
+  return { ids, missing };
+}
+
+function buildStyleValidationError(missingStyles: string[]): { message: string; status: string } {
+  const missingSet = new Set(missingStyles.map((style) => style.toLowerCase()));
+  if (SCHEMA_HAS_IVY_STYLE && missingSet.has('ivy')) {
+    console.error('[style-taxonomy][parity][missing-style]', {
+      style: 'ivy',
+      source: 'schema',
+      missingStyles,
+    });
+    return {
+      message:
+        "Style taxonomy out of sync: missing canonical style 'ivy' in DB. Run style seed SQL and retry.",
+      status: 'error',
+    };
+  }
+  return { message: 'Style is required and must match an existing style option.', status: 'error' };
 }
 
 async function resolveFormalityId(sql: any, formalityName: string): Promise<LookupIdResult> {
@@ -231,6 +277,8 @@ export async function createGarment(prevState: any, formData: FormData): Promise
 
     // Single-select lookup fields
     const styleName = String(formData.get('style') ?? '').trim();
+    const styleNamesInput = parseStringArrayField(formData.get('styles'));
+    const styleNames = styleNamesInput.length > 0 ? styleNamesInput : (styleName ? [styleName] : []);
     const formalityName = String(formData.get('formality') ?? '').trim();
 
     // Multi-select lookup fields (JSON arrays, fallback to legacy comma-separated values)
@@ -246,14 +294,14 @@ export async function createGarment(prevState: any, formData: FormData): Promise
 
     // 2. Fetch IDs for all lookup values in parallel
     const [
-      resolvedStyle,
+      resolvedStyles,
       resolvedFormality,
       suitableWeathersResult,
       suitableTimesOfDayResult,
       suitablePlacesResult,
       suitableOccasionsResult
     ] = await Promise.all([
-      resolveStyleId(sql, styleName),
+      resolveStyleIds(sql, styleNames),
       resolveFormalityId(sql, formalityName),
       suitableWeatherNames.length > 0 ? sql`SELECT id FROM suitable_weathers WHERE name = ANY(${suitableWeatherNames})` : Promise.resolve([]),
       suitableTimeOfDayNames.length > 0 ? sql`SELECT id FROM suitable_times_of_day WHERE name = ANY(${suitableTimeOfDayNames})` : Promise.resolve([]),
@@ -261,10 +309,11 @@ export async function createGarment(prevState: any, formData: FormData): Promise
       suitableOccasionNames.length > 0 ? sql`SELECT id FROM suitable_occasions WHERE name = ANY(${suitableOccasionNames})` : Promise.resolve([])
     ]);
 
-    const styleId = resolvedStyle?.id;
+    const styleIds = resolvedStyles.ids;
+    const styleId = styleIds[0];
     const formalityId = resolvedFormality?.id;
-    if (!styleId) {
-      return { message: 'Style is required and must match an existing style option.', status: 'error' };
+    if (!styleId || resolvedStyles.missing.length > 0) {
+      return buildStyleValidationError(resolvedStyles.missing);
     }
     if (!formalityId) {
       return { message: 'Formality is required and must match an existing formality option.', status: 'error' };
@@ -293,6 +342,11 @@ export async function createGarment(prevState: any, formData: FormData): Promise
         tx`
           INSERT INTO garments (file_name, model, brand, type_id, features, favorite, style_id, formality_id)
           VALUES (${fileName}, ${model}, ${brand}, ${resolvedType.id}, ${features}, ${favorite}, ${styleId}, ${formalityId})
+        `,
+        tx`
+          INSERT INTO garment_style (garment_id, style_id)
+          SELECT currval(pg_get_serial_sequence('garments', 'id')), unnest(${styleIds}::int[])
+          ON CONFLICT (garment_id, style_id) DO NOTHING
         `,
         tx`
           INSERT INTO garment_material_composition (garment_id, material_id, percentage)
@@ -384,11 +438,14 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
     // Get names for single-select lookup fields
     // Get names for single-select lookup fields
     const styleName = String(formData.get('style') ?? '').trim();
+    const stylesInput = formData.get('styles');
+    const providedStyleNames = stylesInput === null
+      ? []
+      : parseStringArrayField(stylesInput);
     const formalityName = String(formData.get('formality') ?? '').trim();
 
-    // Get names for multi-select lookup fields (assuming comma-separated names)
-    // For multi-selects, if formData is empty, we should retain existing associations.
-    // This requires fetching existing associations first.
+    // Get names for multi-select lookup fields.
+    // If formData is empty, retain existing associations.
     const existingColors = await sql`SELECT c.name FROM colors c JOIN garment_color gc ON c.id = gc.color_id WHERE gc.garment_id = ${id}`;
     const existingColorNames = existingColors.map((row: any) => row.name);
     const colorsInput = formData.get('colors');
@@ -421,6 +478,23 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
     const suitableOccasionNames = suitableOccasionsInput === null
       ? existingSuitableOccasionNames
       : parseStringArrayField(suitableOccasionsInput);
+
+    const existingStyles = await sql`
+      SELECT s.name
+      FROM garment_style gs
+      JOIN styles s ON gs.style_id = s.id
+      WHERE gs.garment_id = ${id}
+      ORDER BY gs.style_id ASC
+    `;
+    const existingStyleNames = existingStyles.map((row: any) => row.name);
+    const fallbackExistingStyleNames = existingStyleNames.length > 0
+      ? existingStyleNames
+      : (existingGarment.style_id
+        ? ((await sql`SELECT name FROM styles WHERE id = ${existingGarment.style_id} LIMIT 1`).map((row: any) => row.name))
+        : []);
+    const styleNames = providedStyleNames.length > 0
+      ? providedStyleNames
+      : (styleName ? [styleName] : fallbackExistingStyleNames);
 
     // Materials are complex, assuming a JSON string for now
     const materialsInput = formData.get('materials');
@@ -469,14 +543,14 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
 
     // Fetch IDs for lookup tables
     const [
-      resolvedStyle,
+      resolvedStyles,
       resolvedFormality,
       suitableWeathersResult,
       suitableTimesOfDayResult,
       suitablePlacesResult,
       suitableOccasionsResult,
     ] = await Promise.all([
-      styleName ? resolveStyleId(sql, styleName) : Promise.resolve(null),
+      resolveStyleIds(sql, styleNames),
       formalityName ? resolveFormalityId(sql, formalityName) : Promise.resolve(null),
       suitableWeatherNames.length > 0 ? sql`SELECT id FROM suitable_weathers WHERE name = ANY(${suitableWeatherNames})` : Promise.resolve([]),
       suitableTimeOfDayNames.length > 0 ? sql`SELECT id FROM suitable_times_of_day WHERE name = ANY(${suitableTimeOfDayNames})` : Promise.resolve([]),
@@ -484,14 +558,22 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
       suitableOccasionNames.length > 0 ? sql`SELECT id FROM suitable_occasions WHERE name = ANY(${suitableOccasionNames})` : Promise.resolve([]),
     ]);
 
-    if (styleName && !resolvedStyle) {
-      return { message: 'Style value is invalid. Please re-select style.', status: 'error' };
+    if (resolvedStyles.ids.length === 0 || resolvedStyles.missing.length > 0) {
+      const baseError = buildStyleValidationError(resolvedStyles.missing);
+      return {
+        message:
+          baseError.message === 'Style is required and must match an existing style option.'
+            ? 'Style value is invalid. Please re-select style.'
+            : baseError.message,
+        status: baseError.status,
+      };
     }
     if (formalityName && !resolvedFormality) {
       return { message: 'Formality value is invalid. Please re-select formality.', status: 'error' };
     }
 
-    const styleId = resolvedStyle?.id || existingGarment.style_id;
+    const styleIds = resolvedStyles.ids;
+    const styleId = styleIds[0] || existingGarment.style_id;
     const formalityId = resolvedFormality?.id || existingGarment.formality_id;
 
     const colorIds = await resolveColorIds(sql, colorNames);
@@ -515,8 +597,17 @@ export async function updateGarment(prevState: any, formData: FormData): Promise
             formality_id = ${formalityId}
           WHERE id = ${id}
         `,
+        tx`DELETE FROM garment_style WHERE garment_id = ${id}`,
         tx`DELETE FROM garment_material_composition WHERE garment_id = ${id}`,
       ];
+
+      if (styleIds.length > 0) {
+        txQueries.push(tx`
+          INSERT INTO garment_style (garment_id, style_id)
+          SELECT ${id}, unnest(${styleIds}::int[])
+          ON CONFLICT (garment_id, style_id) DO NOTHING
+        `);
+      }
 
       if (materialCompositionToInsert.length > 0) {
         const materialIds = materialCompositionToInsert.map((material) => material.id);
@@ -589,6 +680,7 @@ export async function deleteGarment(id: number) {
 
   const sql = neon(process.env.DATABASE_URL!);
   try {
+    await sql`DELETE FROM garment_style WHERE garment_id = ${id}`;
     await sql`DELETE FROM garment_material_composition WHERE garment_id = ${id}`;
     await sql`DELETE FROM garment_color WHERE garment_id = ${id}`;
     await sql`DELETE FROM garment_suitable_weather WHERE garment_id = ${id}`;

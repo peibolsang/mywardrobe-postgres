@@ -165,12 +165,13 @@ Use imperative commit subjects.
 - `EditorForm` accepts optional server-preloaded initial props (`initialWardrobeData`, `initialSchemaData`, `initialEditorOptions`) so it can hydrate without client-side fetch flicker.
 - Non-native controls (comboboxes/multi-selects) are submitted via hidden fields in `FormData`.
 - Array fields (`colors`, suitability arrays) are serialized as JSON strings (not comma-joined text) to preserve values safely.
+- Garment styles are multi-value: editor submits `styles` as JSON string array while also submitting legacy `style` as the first style for backward compatibility.
 - Server actions parse JSON array fields with backward-compatible fallback for legacy comma-joined payloads.
 - `createGarment` and `updateGarment` persist core row + junction-table writes in a single DB transaction to avoid partial updates.
 - Material composition accepts flexible values (no strict sum=100 enforcement), but at least one valid material entry (`material` + `percentage > 0`) is required.
 - Source of truth for selectable vocabularies:
   - DB-driven: `type`, `material`, `color` (lookup tables + editor options API + user-creatable upsert flow).
-  - Schema-driven (`public/schema.json` enums): `suitable_places`, `suitable_occasions`, `suitable_weather`, `suitable_time_of_day`, `style`, `formality`.
+  - Schema-driven (`public/schema.json` enums): `suitable_places`, `suitable_occasions`, `suitable_weather`, `suitable_time_of_day`, `style` (including `ivy`), `formality`.
   - Current place label for home context is `Home / WFH` (replacing legacy `Hospitality (Indoor)`).
 
 ## Database Entity-Relationship Model
@@ -186,7 +187,7 @@ Use imperative commit subjects.
 | `type_id`         | `INTEGER`          | `REFERENCES types(id)`         |
 | `features`        | `TEXT`             | `NOT NULL`                     |
 | `favorite`        | `BOOLEAN`          | `NOT NULL`                     |
-| `style_id`        | `INTEGER`          | `REFERENCES styles(id)`        |
+| `style_id`        | `INTEGER`          | `REFERENCES styles(id)` (legacy primary style) |
 | `formality_id`    | `INTEGER`          | `REFERENCES formalities(id)`   |
 
 
@@ -229,6 +230,7 @@ These associate `garments` with multiple values from lookup tables.
 These follow the same pattern (without `percentage`):
 
 * `garment_color`
+* `garment_style`
 * `garment_suitable_weather`
 * `garment_suitable_time_of_day`
 * `garment_suitable_place`
@@ -249,7 +251,7 @@ Most likely with a **composite primary key** on `(garment_id, *_id)`.
 * `garments` has foreign keys to:
 
   * `types`
-  * `styles`
+  * `styles` (legacy primary style pointer)
   * `formalities`
 
 * `garments` is linked via **many-to-many** junction tables to:

@@ -4,7 +4,9 @@ export interface Garment {
   model: string;
   brand: string;
   type: string;
+  // Legacy primary style kept for compatibility; prefer `styles` for matching/filtering.
   style: string;
+  styles: string[];
   formality: string;
   material_composition: MaterialComposition[];
   color_palette: string[];

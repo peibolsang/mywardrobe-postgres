@@ -17,7 +17,23 @@ const fetchWardrobeFromDb = async (): Promise<Garment[]> => {
       t.name AS type,
       g.features,
       g.favorite,
-      s.name AS style,
+      COALESCE(
+        s.name,
+        (
+          SELECT s2.name
+          FROM garment_style gs2
+          JOIN styles s2 ON s2.id = gs2.style_id
+          WHERE gs2.garment_id = g.id
+          ORDER BY gs2.style_id
+          LIMIT 1
+        ),
+        ''
+      ) AS style,
+      COALESCE(
+        json_agg(DISTINCT COALESCE(s_multi.name, s.name))
+          FILTER (WHERE COALESCE(s_multi.name, s.name) IS NOT NULL),
+        '[]'
+      ) AS styles,
       f.name AS formality,
       COALESCE(json_agg(DISTINCT jsonb_build_object('material', m.name, 'percentage', gmc.percentage)) FILTER (WHERE m.name IS NOT NULL), '[]') AS material_composition,
       COALESCE(json_agg(DISTINCT c.name) FILTER (WHERE c.name IS NOT NULL), '[]') AS color_palette,
@@ -28,6 +44,8 @@ const fetchWardrobeFromDb = async (): Promise<Garment[]> => {
     FROM garments g
     LEFT JOIN types t ON g.type_id = t.id
     LEFT JOIN styles s ON g.style_id = s.id
+    LEFT JOIN garment_style gs ON g.id = gs.garment_id
+    LEFT JOIN styles s_multi ON gs.style_id = s_multi.id
     LEFT JOIN formalities f ON g.formality_id = f.id
     LEFT JOIN garment_material_composition gmc ON g.id = gmc.garment_id
     LEFT JOIN materials m ON gmc.material_id = m.id

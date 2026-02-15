@@ -17,7 +17,18 @@ async function getGarment(id: string): Promise<Garment | null> {
       t.name AS type,
       g.features,
       g.favorite,
-      s.name AS style,
+      COALESCE(
+        s.name,
+        (
+          SELECT s2.name
+          FROM garment_style gs2
+          JOIN styles s2 ON s2.id = gs2.style_id
+          WHERE gs2.garment_id = g.id
+          ORDER BY gs2.style_id
+          LIMIT 1
+        ),
+        ''
+      ) AS style,
       f.name AS formality
     FROM garments g
     LEFT JOIN types t ON g.type_id = t.id
@@ -33,7 +44,7 @@ async function getGarment(id: string): Promise<Garment | null> {
   const garment = garmentResult[0] as Garment;
 
   // Fetch many-to-many relationships
-  const [materials, colors, suitableWeathers, suitableTimesOfDay, suitablePlaces, suitableOccasions] = await Promise.all([
+  const [materials, colors, suitableWeathers, suitableTimesOfDay, suitablePlaces, suitableOccasions, styles] = await Promise.all([
     sql`
       SELECT m.name, gmc.percentage
       FROM garment_material_composition gmc
@@ -70,6 +81,13 @@ async function getGarment(id: string): Promise<Garment | null> {
       JOIN suitable_occasions so ON gso.suitable_occasion_id = so.id
       WHERE gso.garment_id = ${id}
     `,
+    sql`
+      SELECT s.name
+      FROM garment_style gs
+      JOIN styles s ON gs.style_id = s.id
+      WHERE gs.garment_id = ${id}
+      ORDER BY gs.style_id ASC
+    `,
   ]);
 
   garment.material_composition = materials.map((m: any) => ({ material: m.name, percentage: m.percentage }));
@@ -78,6 +96,11 @@ async function getGarment(id: string): Promise<Garment | null> {
   garment.suitable_time_of_day = suitableTimesOfDay.map((st: any) => st.name);
   garment.suitable_places = suitablePlaces.map((sp: any) => sp.name);
   garment.suitable_occasions = suitableOccasions.map((so: any) => so.name);
+  garment.styles = styles.map((st: any) => st.name);
+  if (garment.styles.length === 0 && garment.style) {
+    garment.styles = [garment.style];
+  }
+  garment.style = garment.styles[0] ?? garment.style ?? "";
 
   return garment;
 }

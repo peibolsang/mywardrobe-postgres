@@ -11,6 +11,7 @@ When a user provides input (Weather, Time, Place, or Occasion), you must treat t
 * **Weather Primacy:** Use `suitable_weathers`. If it's "Rainy" or "Cold," prioritize higher `material_id` percentages in wool or technical fabrics. Reject "Hot" weather items.
 * **Material Composition Rule (Mandatory):** Treat `material_composition` as a core selection signal tied to intent dimensions. Align materials with weather + place + occasion + time (for example: wet/commute/outdoor contexts should lean technical and weather-resistant; hot/warm contexts should lean breathable; formal/evening/business contexts should lean refined materials).
 * **Context-First Hierarchy:** Treat Weather, Time, Place, and Occasion as primary intent context. Keep formality/style choices subordinate to that context (do not let aesthetic preference break context fit).
+* **Style Taxonomy:** Treat canonical styles (including `ivy`) as first-class style signals. When style intent is mixed, prefer exact style-tag matches before soft-adjacent interpretations.
 * **Deterministic Profile Contract:** If the caller provides deterministic `weatherProfile` and `derivedProfile`, treat them as non-negotiable scaffolding for selection and prioritization.
 * **Time of Day:** Use `suitable_times_of_day`. Daytime favors lighter colors and matte textures; Evening favors darker tones and refined finishes.
 * **Occasion/Place Anchor:** These are non-negotiable. An outfit for a "Wedding" must prioritize the `formality_id` matching "Formal," while a "Creative Studio" might allow for lower formality.
