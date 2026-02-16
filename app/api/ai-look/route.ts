@@ -2059,6 +2059,11 @@ const categorizeType = (type: string): "top" | "outerwear" | "bottom" | "footwea
 
 type GarmentCategory = ReturnType<typeof categorizeType>;
 
+interface PlaceConstraintEnvelope {
+  defaultPlaces: string[];
+  categoryOverrides: Partial<Record<GarmentCategory, string[]>>;
+}
+
 const CORE_SILHOUETTE_CATEGORIES: GarmentCategory[] = ["top", "bottom", "footwear"];
 const SINGLE_REQUIRED_CATEGORIES: GarmentCategory[] = ["outerwear", "top", "bottom", "footwear"];
 const TRAVEL_REQUIRED_CATEGORIES: GarmentCategory[] = ["outerwear", "top", "bottom", "footwear"];
@@ -2080,6 +2085,40 @@ const TRAVEL_CATEGORY_QUOTAS: Record<GarmentCategory, number> = {
 };
 const MAX_RECENT_LOOK_HISTORY = 6;
 const MAX_ALLOWED_OVERLAP_RATIO = 0.8;
+
+const resolveCategoryPlaceConstraints = (
+  envelope: PlaceConstraintEnvelope | null | undefined,
+  category: GarmentCategory
+): string[] => {
+  if (!envelope) return [];
+  return envelope.categoryOverrides[category] ?? envelope.defaultPlaces;
+};
+
+const buildSinglePlaceConstraintEnvelope = (intent: CanonicalIntent): PlaceConstraintEnvelope | null => {
+  const homePlace = findCanonicalOption(PLACE_OPTIONS, "Home / WFH");
+  if (!homePlace) return null;
+
+  const hasHomeContext = intent.place.some(
+    (place) => normalize(place).toLowerCase() === homePlace.toLowerCase()
+  );
+  if (!hasHomeContext) return null;
+
+  const cityPlace = findCanonicalOption(PLACE_OPTIONS, "Metropolitan / City");
+  const transitPlace = findCanonicalOption(PLACE_OPTIONS, "Transit Hub / Airport");
+  const outerwearAndFootwearPlaces = dedupeLowercase([
+    ...intent.place,
+    cityPlace ?? "",
+    transitPlace ?? "",
+  ]);
+
+  return {
+    defaultPlaces: intent.place,
+    categoryOverrides: {
+      outerwear: outerwearAndFootwearPlaces,
+      footwear: outerwearAndFootwearPlaces,
+    },
+  };
+};
 
 const lineupSignature = (ids: number[]): string =>
   Array.from(new Set(ids)).sort((a, b) => a - b).join("-");
@@ -2857,7 +2896,11 @@ const evaluateGarmentHardConstraints = (
     "type" | "features" | "material_composition" | "suitable_weather" | "suitable_occasions" | "suitable_places"
   >,
   intent: CanonicalIntent,
-  options?: { weatherContext?: string | null; weatherProfile?: WeatherProfile | null }
+  options?: {
+    weatherContext?: string | null;
+    weatherProfile?: WeatherProfile | null;
+    placeConstraints?: PlaceConstraintEnvelope | null;
+  }
 ): {
   passes: boolean;
   reasons: GarmentHardFailReason[];
@@ -2869,6 +2912,8 @@ const evaluateGarmentHardConstraints = (
   rainReadyReason: string | null;
 } => {
   const reasons: GarmentHardFailReason[] = [];
+  const category = categorizeType(garment.type);
+  const requiredPlaces = resolveCategoryPlaceConstraints(options?.placeConstraints, category);
   const weatherMatch =
     intent.weather.length === 0 ||
     Boolean(intersectionMatches(garment.suitable_weather ?? [], intent.weather, { allSeasonAlias: "all season" }));
@@ -2876,8 +2921,8 @@ const evaluateGarmentHardConstraints = (
     intent.occasion.length === 0 ||
     Boolean(intersectionMatches(garment.suitable_occasions ?? [], intent.occasion));
   const placeMatch =
-    intent.place.length === 0 ||
-    Boolean(intersectionMatches(garment.suitable_places ?? [], intent.place));
+    requiredPlaces.length === 0 ||
+    Boolean(intersectionMatches(garment.suitable_places ?? [], requiredPlaces));
 
   if (!weatherMatch) reasons.push("weather_mismatch");
   if (!occasionMatch) reasons.push("occasion_mismatch");
@@ -2895,7 +2940,6 @@ const evaluateGarmentHardConstraints = (
     reasons.push("wet_weather_not_rain_ready");
   }
 
-  const category = categorizeType(garment.type);
   const wetRisk = options?.weatherProfile?.wetSurfaceRisk ?? (inferWetConditions(options?.weatherContext) ? "high" : "low");
   if ((category === "outerwear" || category === "footwear") && (wetRisk === "high" || wetRisk === "medium")) {
     const technicalShare = materialBucketShare(garment.material_composition, "technical");
@@ -2922,7 +2966,11 @@ const evaluateGarmentHardConstraints = (
 const missingWetSafeCategoriesFromWardrobe = (
   wardrobe: CompactGarment[],
   intent: CanonicalIntent,
-  options: { weatherContext?: string | null; weatherProfile?: WeatherProfile | null },
+  options: {
+    weatherContext?: string | null;
+    weatherProfile?: WeatherProfile | null;
+    placeConstraints?: PlaceConstraintEnvelope | null;
+  },
   requiredCategories: GarmentCategory[] = ["outerwear", "footwear"]
 ): GarmentCategory[] => {
   if (!isWetWeatherSafetyGateActive(options.weatherContext, options.weatherProfile)) {
@@ -2961,6 +3009,7 @@ const scoreGarmentForIntent = (
   options?: {
     weatherContext?: string | null;
     weatherProfile?: WeatherProfile | null;
+    placeConstraints?: PlaceConstraintEnvelope | null;
     derivedProfile?: DerivedProfile | null;
     userDirectives?: UserIntentDirectives | null;
     travelReason?: "Vacation" | "Office" | "Customer visit" | null;
@@ -2970,6 +3019,7 @@ const scoreGarmentForIntent = (
   const hardEvaluation = evaluateGarmentHardConstraints(garment, intent, {
     weatherContext: options?.weatherContext,
     weatherProfile: options?.weatherProfile,
+    placeConstraints: options?.placeConstraints,
   });
   if (!hardEvaluation.passes) {
     return -10000 - (hardEvaluation.reasons.length * 250);
@@ -3072,6 +3122,7 @@ const buildLineupRuleTrace = ({
   intent,
   weatherContext,
   weatherProfile,
+  placeConstraints,
   derivedProfile,
   userDirectives,
 }: {
@@ -3079,6 +3130,7 @@ const buildLineupRuleTrace = ({
   intent: CanonicalIntent;
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
+  placeConstraints?: PlaceConstraintEnvelope | null;
   derivedProfile?: DerivedProfile | null;
   userDirectives?: UserIntentDirectives | null;
 }) =>
@@ -3097,6 +3149,7 @@ const buildLineupRuleTrace = ({
       {
         weatherContext,
         weatherProfile,
+        placeConstraints,
       }
     );
     const materialScore = computeMaterialIntentScore({
@@ -3236,6 +3289,7 @@ const enforceCoreSilhouetteFromPool = ({
   intent,
   weatherContext,
   weatherProfile,
+  placeConstraints,
   derivedProfile,
   userDirectives,
   travelReason,
@@ -3252,6 +3306,7 @@ const enforceCoreSilhouetteFromPool = ({
   intent: CanonicalIntent;
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
+  placeConstraints?: PlaceConstraintEnvelope | null;
   derivedProfile?: DerivedProfile | null;
   userDirectives?: UserIntentDirectives | null;
   travelReason?: "Vacation" | "Office" | "Customer visit" | null;
@@ -3272,6 +3327,7 @@ const enforceCoreSilhouetteFromPool = ({
       travelReason,
       weatherContext,
       weatherProfile,
+      placeConstraints,
       derivedProfile,
       userDirectives,
     }) + (usedGarmentIds.has(left.id) ? 0 : 25) + (left.favorite ? 5 : 0);
@@ -3279,6 +3335,7 @@ const enforceCoreSilhouetteFromPool = ({
       travelReason,
       weatherContext,
       weatherProfile,
+      placeConstraints,
       derivedProfile,
       userDirectives,
     }) + (usedGarmentIds.has(right.id) ? 0 : 25) + (right.favorite ? 5 : 0);
@@ -3458,6 +3515,7 @@ const normalizeToFixedCategoryLook = ({
   intent,
   weatherContext,
   weatherProfile,
+  placeConstraints,
   derivedProfile,
   userDirectives,
   travelReason,
@@ -3473,6 +3531,7 @@ const normalizeToFixedCategoryLook = ({
   intent: CanonicalIntent;
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
+  placeConstraints?: PlaceConstraintEnvelope | null;
   derivedProfile?: DerivedProfile | null;
   userDirectives?: UserIntentDirectives | null;
   travelReason?: "Vacation" | "Office" | "Customer visit" | null;
@@ -3502,6 +3561,7 @@ const normalizeToFixedCategoryLook = ({
     intent,
     weatherContext,
     weatherProfile,
+    placeConstraints,
     derivedProfile,
     userDirectives,
     travelReason,
@@ -3559,6 +3619,7 @@ const normalizeToFixedCategoryLook = ({
             travelReason,
             weatherContext,
             weatherProfile,
+            placeConstraints,
             derivedProfile,
             userDirectives,
           }) +
@@ -3614,6 +3675,7 @@ const computeObjectiveMatchScore = (
   options?: {
     weatherContext?: string | null;
     weatherProfile?: WeatherProfile | null;
+    placeConstraints?: PlaceConstraintEnvelope | null;
     derivedProfile?: DerivedProfile | null;
     userDirectives?: UserIntentDirectives | null;
   }
@@ -3634,9 +3696,13 @@ const computeObjectiveMatchScore = (
   );
   if (intent.occasion.length > 0) dimensionScores.push(ratioScore(occasionMatches));
 
-  const placeMatches = lineup.map((garment) =>
-    Boolean(intersectionMatches(garment.suitable_places, intent.place))
-  );
+  const placeMatches = lineup.map((garment) => {
+    const requiredPlaces = resolveCategoryPlaceConstraints(
+      options?.placeConstraints,
+      categorizeType(garment.type)
+    );
+    return Boolean(intersectionMatches(garment.suitable_places, requiredPlaces));
+  });
   if (intent.place.length > 0) dimensionScores.push(ratioScore(placeMatches));
 
   const timeMatches = lineup.map((garment) =>
@@ -3713,6 +3779,7 @@ const toValidatedSingleLookCandidate = ({
   intent,
   weatherContext,
   weatherProfile,
+  placeConstraints,
   derivedProfile,
   userDirectives,
   recentUsedIds,
@@ -3728,6 +3795,7 @@ const toValidatedSingleLookCandidate = ({
   intent: CanonicalIntent;
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
+  placeConstraints?: PlaceConstraintEnvelope | null;
   derivedProfile?: DerivedProfile | null;
   userDirectives?: UserIntentDirectives | null;
   recentUsedIds?: Set<number>;
@@ -3747,6 +3815,7 @@ const toValidatedSingleLookCandidate = ({
     intent,
     weatherContext,
     weatherProfile,
+    placeConstraints,
     derivedProfile,
     userDirectives,
     requiredCategories: SINGLE_REQUIRED_CATEGORIES,
@@ -3778,6 +3847,7 @@ const toValidatedSingleLookCandidate = ({
       {
         weatherContext,
         weatherProfile,
+        placeConstraints,
       }
     ).passes
   );
@@ -3786,6 +3856,7 @@ const toValidatedSingleLookCandidate = ({
   const matchScore = computeObjectiveMatchScore(lineupGarments, intent, {
     weatherContext,
     weatherProfile,
+    placeConstraints,
     derivedProfile,
     userDirectives,
   });
@@ -3817,6 +3888,7 @@ const buildDeterministicSingleLookFallbackCandidate = ({
   intent,
   weatherContext,
   weatherProfile,
+  placeConstraints,
   derivedProfile,
   userDirectives,
   recentUsedIds,
@@ -3830,6 +3902,7 @@ const buildDeterministicSingleLookFallbackCandidate = ({
   intent: CanonicalIntent;
   weatherContext?: string | null;
   weatherProfile?: WeatherProfile | null;
+  placeConstraints?: PlaceConstraintEnvelope | null;
   derivedProfile?: DerivedProfile | null;
   userDirectives?: UserIntentDirectives | null;
   recentUsedIds?: Set<number>;
@@ -3852,6 +3925,7 @@ const buildDeterministicSingleLookFallbackCandidate = ({
           scoreGarmentForIntent(garment, intent, {
             weatherContext,
             weatherProfile,
+            placeConstraints,
             derivedProfile,
             userDirectives,
           }) +
@@ -3873,6 +3947,7 @@ const buildDeterministicSingleLookFallbackCandidate = ({
     intent,
     weatherContext,
     weatherProfile,
+    placeConstraints,
     derivedProfile,
     userDirectives,
     recentUsedIds,
@@ -6417,6 +6492,7 @@ export async function POST(request: Request) {
       weatherProfile: canonicalWeatherProfile,
       derivedProfile,
     });
+    const singlePlaceConstraints = buildSinglePlaceConstraintEnvelope(canonicalIntent);
     logInfo(
       "[ai-look][single][step-1][derived-styling]",
       {
@@ -6426,6 +6502,12 @@ export async function POST(request: Request) {
       }
     );
     logInfo("[ai-look][single][step-1][canonical-intent]", { ...canonicalIntent });
+    if (singlePlaceConstraints) {
+      logInfo("[ai-look][single][constraints][place-envelope]", {
+        defaultPlaces: singlePlaceConstraints.defaultPlaces,
+        categoryOverrides: singlePlaceConstraints.categoryOverrides,
+      });
+    }
 
     const garmentById = new Map(wardrobeData.map((garment) => [garment.id, garment]));
     const garmentCategoryById = new Map(
@@ -6498,6 +6580,7 @@ export async function POST(request: Request) {
       {
         weatherContext: weatherContextSummary || null,
         weatherProfile: canonicalWeatherProfile,
+        placeConstraints: singlePlaceConstraints,
       },
       ["outerwear", "footwear"]
     );
@@ -6608,6 +6691,7 @@ export async function POST(request: Request) {
             intent: canonicalIntent,
             weatherContext: weatherContextSummary || null,
             weatherProfile: canonicalWeatherProfile,
+            placeConstraints: singlePlaceConstraints,
             derivedProfile,
             userDirectives,
             recentUsedIds,
@@ -6718,6 +6802,7 @@ export async function POST(request: Request) {
         intent: canonicalIntent,
         weatherContext: weatherContextSummary || null,
         weatherProfile: canonicalWeatherProfile,
+        placeConstraints: singlePlaceConstraints,
         derivedProfile,
         userDirectives,
         recentUsedIds,
@@ -6799,6 +6884,7 @@ export async function POST(request: Request) {
           intent: canonicalIntent,
           weatherContext: weatherContextSummary || null,
           weatherProfile: canonicalWeatherProfile,
+          placeConstraints: singlePlaceConstraints,
           derivedProfile,
           userDirectives,
         }),
@@ -6844,6 +6930,7 @@ export async function POST(request: Request) {
           lineup: selectedLook.lineupGarments,
           userDirectives,
         }),
+        placeConstraints: singlePlaceConstraints,
         weatherContext: weatherContextSummary || null,
         weatherContextStatus: weatherStatus,
         weatherTemporalTarget: temporalTarget,
