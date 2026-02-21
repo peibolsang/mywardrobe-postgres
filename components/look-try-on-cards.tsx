@@ -28,6 +28,10 @@ interface LookTryOnCardsProps {
   secondaryActionDisabled?: boolean;
   secondaryActionLabel?: string;
   secondaryActionClassName?: string;
+  onTertiaryAction?: () => void;
+  tertiaryActionDisabled?: boolean;
+  tertiaryActionLabel?: string;
+  tertiaryActionClassName?: string;
   onOpenImage: (imageUrl: string, imageAlt: string) => void;
 }
 
@@ -112,6 +116,10 @@ export default function LookTryOnCards({
   secondaryActionDisabled = false,
   secondaryActionLabel,
   secondaryActionClassName,
+  onTertiaryAction,
+  tertiaryActionDisabled = false,
+  tertiaryActionLabel,
+  tertiaryActionClassName,
   onOpenImage,
 }: LookTryOnCardsProps) {
   return (
@@ -162,6 +170,17 @@ export default function LookTryOnCards({
                 disabled={secondaryActionDisabled}
               >
                 {secondaryActionLabel}
+              </Button>
+            ) : null}
+            {onTertiaryAction && tertiaryActionLabel ? (
+              <Button
+                type="button"
+                variant="outline"
+                className={tertiaryActionClassName}
+                onClick={onTertiaryAction}
+                disabled={tertiaryActionDisabled}
+              >
+                {tertiaryActionLabel}
               </Button>
             ) : null}
           </>

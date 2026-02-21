@@ -251,3 +251,5 @@
 - Naming consistency note: Renamed Looks tab/action label from `Create New Look` to `New Look Idea` in UI and architecture docs to align product terminology.
 - Naming consistency note: Renamed garment CMDK action label from `Generate Look Around This Garment` to `New Look Idea Around This Garment` to align with `/looks` naming.
 - Saved-look editing note: Favorite look deep-link detail now opens in read-only mode by default with explicit `Edit Look`; save uses `PATCH /api/looks/manual/saved` to update the same row by `id` (no duplicate insert), then returns to read-only with a confirmation toast.
+
+- CMDK UX note: Added saved-look action `Edit Look` (shortcut `E`) in look detail palette to enter read/write mode directly from keyboard command flow.

@@ -38,7 +38,7 @@ import {
 } from "@/lib/manual-look-selection";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { Code2, Copy, Plus, Trash2 } from "lucide-react";
+import { Code2, Copy, Pencil, Plus, Trash2 } from "lucide-react";
 
 interface LookGarment {
   id: number;
@@ -750,7 +750,17 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     const handleActionHotkeys = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (savedLookActionsSearchValue.trim().length > 0) return;
-      if (event.key !== "J") return;
+      const key = event.key.toUpperCase();
+      if (key === "E") {
+        event.preventDefault();
+        setIsSavedPreviewEditing(true);
+        setIsSavedLookActionsOpen(false);
+        setSavedLookActionsSearchValue("");
+        setSavedLookActionsView("search");
+        setIsSavedLookJsonCopied(false);
+        return;
+      }
+      if (key !== "J") return;
       event.preventDefault();
       setSavedLookActionsView("export-json");
       setSavedLookActionsSearchValue("");
@@ -1458,6 +1468,14 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     setIsSavedLookJsonCopied(false);
   };
 
+  const handleEditSavedLookFromCmdk = () => {
+    setIsSavedPreviewEditing(true);
+    setIsSavedLookActionsOpen(false);
+    setSavedLookActionsSearchValue("");
+    setSavedLookActionsView("search");
+    setIsSavedLookJsonCopied(false);
+  };
+
   const handleBackToSavedLookActionSearch = () => {
     setSavedLookActionsView("search");
     setSavedLookActionsSearchValue("");
@@ -1539,7 +1557,12 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     !savedLookActionQuery ||
     (savedLookActionQuery.length >= 2 &&
       "export look to json saved look json".includes(savedLookActionQuery));
-  const showSavedLookNoActionsFound = !showSavedLookActionThresholdHint && !showExportLookJsonAction;
+  const showEditLookAction =
+    !savedLookActionQuery ||
+    (savedLookActionQuery.length >= 2 &&
+      "edit look rename title update".includes(savedLookActionQuery));
+  const showSavedLookNoActionsFound =
+    !showSavedLookActionThresholdHint && !showExportLookJsonAction && !showEditLookAction;
   const showMainPanelCardShell = !(activeMode === "saved" && savedTabView === "list");
 
   useEffect(() => {
@@ -1587,7 +1610,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
         {savedLookActionsView === "search" ? (
           <>
             <CommandInput
-              placeholder="Search actions... (J = Export JSON)"
+              placeholder="Search actions... (E = Edit, J = Export JSON)"
               value={savedLookActionsSearchValue}
               onValueChange={setSavedLookActionsSearchValue}
             />
@@ -1597,8 +1620,26 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
               ) : (
                 <CommandEmpty>No actions found</CommandEmpty>
               )}
-              {showExportLookJsonAction ? (
+              {showExportLookJsonAction || showEditLookAction ? (
                 <CommandGroup heading="Actions">
+                  {showEditLookAction ? (
+                    <CommandItem
+                      value="Edit Look"
+                      keywords={["edit", "look", "rename", "title", "update"]}
+                      onSelect={handleEditSavedLookFromCmdk}
+                    >
+                      <div className="flex w-full items-center justify-between gap-3">
+                        <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                          <Pencil className="size-4 shrink-0 text-gray-500" />
+                          <span className="truncate">Edit Look</span>
+                        </span>
+                        <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                          E
+                        </span>
+                      </div>
+                    </CommandItem>
+                  ) : null}
+                  {showExportLookJsonAction ? (
                   <CommandItem
                     value="Export Look to JSON"
                     keywords={["export", "look", "json", "saved"]}
@@ -1614,6 +1655,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                       </span>
                     </div>
                   </CommandItem>
+                  ) : null}
                 </CommandGroup>
               ) : null}
               {showSavedLookNoActionsFound && null}
@@ -2206,14 +2248,18 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                               onEditAction={() => setIsSavedPreviewEditing(true)}
                               editActionDisabled={savedTabBusy}
                               editActionLabel="Edit Look"
-                              onSecondaryAction={
+                              onSecondaryAction={isSavedPreviewEditing ? () => setIsSavedPreviewEditing(false) : undefined}
+                              secondaryActionDisabled={savedTabBusy}
+                              secondaryActionLabel="Cancel"
+                              secondaryActionClassName="w-full"
+                              onTertiaryAction={
                                 isSavedPreviewEditing && savedPreviewLookId != null
                                   ? () => void handleDeleteSavedLook(savedPreviewLookId)
                                   : undefined
                               }
-                              secondaryActionDisabled={savedTabBusy || savedPreviewLookId == null}
-                              secondaryActionLabel={isSelectionLoading ? "Deleting..." : "Delete Look"}
-                              secondaryActionClassName="w-full border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
+                              tertiaryActionDisabled={savedTabBusy || savedPreviewLookId == null}
+                              tertiaryActionLabel={isSelectionLoading ? "Deleting..." : "Delete Look"}
+                              tertiaryActionClassName="w-full border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
                               onOpenImage={openTryOnImageModal}
                             />
                           </div>
