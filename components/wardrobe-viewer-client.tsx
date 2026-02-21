@@ -233,12 +233,12 @@ const colorMap: { [key: string]: string } = {
 const AddNewGarmentCard = () => (
   <Link
     href="/add-garment"
-    className="group flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-6 py-8 text-center transition hover:border-slate-400 hover:bg-slate-50"
+    className="group flex min-h-[80px] w-full flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-4 py-2 text-center transition hover:border-slate-400 hover:bg-slate-50 sm:min-h-[320px] sm:px-6 sm:py-8"
   >
-    <span className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full border border-slate-300 bg-white text-2xl leading-none text-slate-700 transition group-hover:border-slate-500 group-hover:text-slate-900">
+    <span className="inline-flex h-12 w-12 items-center justify-center rounded-full border border-slate-300 bg-white text-2xl leading-none text-slate-700 transition group-hover:border-slate-500 group-hover:text-slate-900 sm:mb-3">
       +
     </span>
-    <p className="text-sm font-semibold text-slate-900">Add New Garment</p>
+    <p className="hidden text-sm font-semibold text-slate-900 sm:block">Add New Garment</p>
   </Link>
 );
 

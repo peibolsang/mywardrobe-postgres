@@ -253,3 +253,10 @@
 - Saved-look editing note: Favorite look deep-link detail now opens in read-only mode by default with explicit `Edit Look`; save uses `PATCH /api/looks/manual/saved` to update the same row by `id` (no duplicate insert), then returns to read-only with a confirmation toast.
 
 - CMDK UX note: Added saved-look action `Edit Look` (shortcut `E`) in look detail palette to enter read/write mode directly from keyboard command flow.
+- Prompt tuning note: Updated manual try-on image prompt to enforce a mandatory styling rule that all shirts and t-shirts are tucked into pants.
+- Prompt tuning note: Added a mandatory try-on styling rule for loafers to always include socks (no barefoot loafers).
+- Mobile layout note: Reduced `Add New Garment` and `Add New Look` card footprint on mobile (narrower + shorter) while preserving existing desktop sizing with `sm:` overrides; updated favorite-looks add-card skeleton to match.
+- Mobile compact add-cards note: On mobile, `Add New Garment` and `Add New Look` now hide label text and render icon-only with `min-h-[96px]`; desktop keeps existing labeled layout. Matching Favorite Looks add-card skeleton follows the same mobile behavior.
+- Mobile tabs note: `/looks` top navigation now renders icon-only tabs on mobile (Favorite/New Idea/Changing Room/Travel) with `aria-label` accessibility, while desktop keeps text labels.
+- Mobile nav affordance note: Increased mobile menu trigger (shirt icon) to profile-sized control (`h-10 w-10`) with larger icon (`h-5 w-5`) for visual parity and easier tap target.
+- Mobile nav layout note: Moved the t-shirt menu trigger into the right-side user control cluster next to profile and enlarged it (`h-11 w-11`, icon `h-6 w-6`) for clearer prominence and tapability.

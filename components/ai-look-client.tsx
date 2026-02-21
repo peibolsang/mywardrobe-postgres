@@ -38,7 +38,7 @@ import {
 } from "@/lib/manual-look-selection";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { Code2, Copy, Pencil, Plus, Trash2 } from "lucide-react";
+import { Code2, Copy, Luggage, Pencil, Plus, ShoppingBag, Sparkles, Star, Trash2 } from "lucide-react";
 
 interface LookGarment {
   id: number;
@@ -1735,6 +1735,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
               role="tab"
               aria-selected={activeMode === "saved"}
               aria-controls="looks-main-panel"
+              aria-label="Favorite Looks"
               className={cn(
                 "-mb-px border-b-2 border-transparent px-1 py-2 text-sm font-medium transition",
                 activeMode === "saved"
@@ -1746,13 +1747,15 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                 setError(null);
               }}
             >
-              Favorite Looks
+              <Star className="mx-auto size-4 sm:hidden" aria-hidden="true" />
+              <span className="hidden sm:inline">Favorite Looks</span>
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={activeMode === "single"}
               aria-controls="looks-main-panel"
+              aria-label="New Look Idea"
               className={cn(
                 "-mb-px border-b-2 border-transparent px-1 py-2 text-sm font-medium transition",
                 activeMode === "single"
@@ -1764,13 +1767,15 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                 setError(null);
               }}
             >
-              New Look Idea
+              <Sparkles className="mx-auto size-4 sm:hidden" aria-hidden="true" />
+              <span className="hidden sm:inline">New Look Idea</span>
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={activeMode === "selection"}
               aria-controls="looks-main-panel"
+              aria-label="Changing Room"
               className={cn(
                 "-mb-px border-b-2 border-transparent px-1 py-2 text-sm font-medium transition",
                 activeMode === "selection"
@@ -1782,13 +1787,15 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                 setError(null);
               }}
             >
-              Changing Room
+              <ShoppingBag className="mx-auto size-4 sm:hidden" aria-hidden="true" />
+              <span className="hidden sm:inline">Changing Room</span>
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={activeMode === "travel"}
               aria-controls="looks-main-panel"
+              aria-label="Pack for Travel"
               className={cn(
                 "-mb-px border-b-2 border-transparent px-1 py-2 text-sm font-medium transition",
                 activeMode === "travel"
@@ -1800,7 +1807,8 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                 setError(null);
               }}
             >
-              Pack for Travel
+              <Luggage className="mx-auto size-4 sm:hidden" aria-hidden="true" />
+              <span className="hidden sm:inline">Pack for Travel</span>
             </button>
             </div>
           </div>
@@ -2058,23 +2066,23 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                 {savedTabView === "list" ? (
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     {shouldShowSavedLooksLoading ? (
-                      <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-8">
-                        <div className="flex min-h-[320px] flex-col items-center justify-center">
-                          <Skeleton className="mb-3 h-12 w-12 rounded-full" />
-                          <Skeleton className="h-4 w-28" />
+                      <div className="w-full rounded-lg border border-dashed border-slate-300 bg-white px-4 py-2 sm:px-6 sm:py-8">
+                        <div className="flex min-h-[80px] flex-col items-center justify-center sm:min-h-[320px]">
+                          <Skeleton className="h-12 w-12 rounded-full" />
+                          <Skeleton className="mt-3 hidden h-4 w-28 sm:block" />
                         </div>
                       </div>
                     ) : (
                       <button
                         type="button"
                         onClick={handleAddNewLookEntry}
-                        className="group flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-6 py-8 text-center transition hover:border-slate-400 hover:bg-slate-50"
+                        className="group flex min-h-[80px] w-full flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-4 py-2 text-center transition hover:border-slate-400 hover:bg-slate-50 sm:min-h-[320px] sm:px-6 sm:py-8"
                         aria-label="Add new look"
                       >
-                        <span className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full border border-slate-300 bg-white text-2xl leading-none text-slate-700 transition group-hover:border-slate-500 group-hover:text-slate-900">
+                        <span className="inline-flex h-12 w-12 items-center justify-center rounded-full border border-slate-300 bg-white text-2xl leading-none text-slate-700 transition group-hover:border-slate-500 group-hover:text-slate-900 sm:mb-3">
                           +
                         </span>
-                        <p className="text-sm font-semibold text-slate-900">Add New Look</p>
+                        <p className="hidden text-sm font-semibold text-slate-900 sm:block">Add New Look</p>
                       </button>
                     )}
 

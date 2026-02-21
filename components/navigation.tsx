@@ -102,29 +102,27 @@ export function Navigation() {
           })}
         </div>
 
-        {/* Mobile Navigation */}
-        <div className="md:hidden">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm">
-                <Shirt className="w-4 h-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              {links.map(({ href, label, icon: Icon }) => (
-                <DropdownMenuItem key={href} asChild>
-                  <Link href={href} className="flex items-center space-x-2">
-                    <Icon className="w-4 h-4" />
-                    <span>{label}</span>
-                  </Link>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
         {/* User Section */}
         <div className="flex items-center space-x-2">
+          <div className="md:hidden">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="h-11 w-11 rounded-full p-0">
+                  <Shirt className="size-7" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                {links.map(({ href, label, icon: Icon }) => (
+                  <DropdownMenuItem key={href} asChild>
+                    <Link href={href} className="flex items-center space-x-2">
+                      <Icon className="w-4 h-4" />
+                      <span>{label}</span>
+                    </Link>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
           {status === "authenticated" ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

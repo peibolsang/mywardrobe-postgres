@@ -196,6 +196,8 @@ const buildTryOnPrompt = ({
     `Weather context: ${weatherSummary}`,
     "The man should be naturally integrated into that city and weather conditions.",
     "Natural posture, realistic proportions, no text overlays, no logos added, no collage.",
+    "STYLING RULE (MANDATORY): Every shirt and t-shirt must be tucked into the pants.",
+    "STYLING RULE (MANDATORY): Whenever loafers are worn, include socks (no barefoot loafers).",
     "Outfit garments:",
     garmentList,
   ].join("\n\n");
