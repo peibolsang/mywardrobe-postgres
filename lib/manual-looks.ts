@@ -79,6 +79,35 @@ export const listManualLooksByOwner = async (ownerKey: string): Promise<ManualLo
   return rows.map(mapRow);
 };
 
+export const getManualLookById = async ({
+  ownerKey,
+  id,
+}: {
+  ownerKey: string;
+  id: number;
+}): Promise<ManualLookSaved | null> => {
+  const rows = (await sql`
+    SELECT
+      id,
+      owner_key,
+      title,
+      garment_ids_json,
+      generated_image_url,
+      location_label,
+      weather_summary,
+      weather_source,
+      created_at,
+      updated_at
+    FROM manual_look_saved
+    WHERE owner_key = ${ownerKey}
+      AND id = ${id}
+    LIMIT 1;
+  `) as ManualLookSavedRow[];
+
+  const row = rows[0];
+  return row ? mapRow(row) : null;
+};
+
 export const insertManualLook = async ({
   ownerKey,
   title,

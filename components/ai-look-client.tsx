@@ -396,10 +396,15 @@ const summarizeLook = (garments: LookGarment[]): LookDetailsSummary => {
   };
 };
 
-export default function AiLookClient() {
+interface AiLookClientProps {
+  initialSavedLookId?: number | null;
+}
+
+export default function AiLookClient({ initialSavedLookId = null }: AiLookClientProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const isStandaloneSavedLookPage = initialSavedLookId != null;
   const [activeMode, setActiveMode] = useState<AiMode>("saved");
 
   const [prompt, setPrompt] = useState("");
@@ -431,10 +436,13 @@ export default function AiLookClient() {
   const [singleTryOnLookTitle, setSingleTryOnLookTitle] = useState("");
   const [savedManualLooks, setSavedManualLooks] = useState<ManualSavedLook[]>([]);
   const [savedLooksLoading, setSavedLooksLoading] = useState(false);
+  const [hasLoadedSavedLooksOnce, setHasLoadedSavedLooksOnce] = useState(false);
   const [savedLooksError, setSavedLooksError] = useState<string | null>(null);
   const [savedPreviewLookId, setSavedPreviewLookId] = useState<number | null>(null);
-  const [savedTabView, setSavedTabView] = useState<"list" | "detail">("list");
-  const [savedPreviewLoading, setSavedPreviewLoading] = useState(false);
+  const [savedTabView, setSavedTabView] = useState<"list" | "detail">(
+    isStandaloneSavedLookPage ? "detail" : "list"
+  );
+  const [savedPreviewLoading, setSavedPreviewLoading] = useState(isStandaloneSavedLookPage);
   const [savedPreviewGarments, setSavedPreviewGarments] = useState<LookGarment[]>([]);
   const [savedPreviewImageUrl, setSavedPreviewImageUrl] = useState<string | null>(null);
   const [savedPreviewContext, setSavedPreviewContext] = useState<ManualTryOnContext | null>(null);
@@ -481,6 +489,7 @@ export default function AiLookClient() {
   const primaryLook = singleResult?.primaryLook ?? null;
   const selectionActionBusy = isSelectionLoading || isSingleTryOnLoading;
   const savedTabBusy = selectionActionBusy || savedPreviewLoading;
+  const shouldShowSavedLooksLoading = activeMode === "saved" && (!hasLoadedSavedLooksOnce || savedLooksLoading);
   const lookDetails = useMemo(() => summarizeLook(selectionGarments), [selectionGarments]);
   const singleTryOnLookDetails = useMemo(() => summarizeLook(singleTryOnGarments), [singleTryOnGarments]);
   const savedPreviewLookDetails = useMemo(() => summarizeLook(savedPreviewGarments), [savedPreviewGarments]);
@@ -488,6 +497,12 @@ export default function AiLookClient() {
     () => savedManualLooks.find((look) => look.id === savedPreviewLookId) ?? null,
     [savedManualLooks, savedPreviewLookId]
   );
+
+  useEffect(() => {
+    if (!isStandaloneSavedLookPage) return;
+    if (activeMode !== "saved") setActiveMode("saved");
+    if (savedTabView !== "detail") setSavedTabView("detail");
+  }, [activeMode, isStandaloneSavedLookPage, savedTabView]);
 
   const getTryOnErrorMessage = (payload: ManualTryOnErrorResponse | null): string => {
     if (payload?.errorCode === "PROFILE_BODY_PHOTO_REQUIRED") {
@@ -677,6 +692,7 @@ export default function AiLookClient() {
       setSavedManualLooks([]);
     } finally {
       setSavedLooksLoading(false);
+      setHasLoadedSavedLooksOnce(true);
     }
   };
 
@@ -1330,6 +1346,9 @@ export default function AiLookClient() {
         setSavedPreviewImageUrl(null);
         setSavedPreviewContext(null);
         setSavedPreviewTitle("");
+        if (pathname.startsWith("/looks/") && pathname !== "/looks") {
+          router.push("/looks");
+        }
       }
       await loadSavedManualLooks();
     } catch {
@@ -1340,7 +1359,15 @@ export default function AiLookClient() {
     }
   };
 
-  const handleLoadSavedLookPreview = async (savedLook: ManualSavedLook) => {
+  const handleLoadSavedLookPreview = async (
+    savedLook: ManualSavedLook,
+    options?: { syncUrl?: boolean }
+  ) => {
+    const shouldSyncUrl = options?.syncUrl ?? true;
+    if (shouldSyncUrl) {
+      router.push(`/looks/${savedLook.id}`);
+      return;
+    }
     setSavedTabView("detail");
     setSavedPreviewLoading(true);
     setSavedPreviewLoadError(null);
@@ -1370,8 +1397,7 @@ export default function AiLookClient() {
   };
 
   const handleBackToSavedLooksList = () => {
-    setSavedTabView("list");
-    setSavedPreviewLoadError(null);
+    router.push("/looks");
   };
 
   const handleClearSingle = () => {
@@ -1496,6 +1522,32 @@ export default function AiLookClient() {
   const showSavedLookNoActionsFound = !showSavedLookActionThresholdHint && !showExportLookJsonAction;
   const showMainPanelCardShell = !(activeMode === "saved" && savedTabView === "list");
 
+  useEffect(() => {
+    if (!initialSavedLookId) return;
+    if (savedLooksLoading) return;
+    if (!hasLoadedSavedLooksOnce) return;
+    if (savedManualLooks.length === 0) {
+      setSavedPreviewLoading(false);
+      setSavedPreviewLoadError("Could not load this look.");
+      return;
+    }
+    const target = savedManualLooks.find((look) => look.id === initialSavedLookId);
+    if (!target) {
+      setSavedPreviewLoading(false);
+      setSavedPreviewLoadError("Could not load this look.");
+      return;
+    }
+    if (savedPreviewLookId === initialSavedLookId && savedTabView === "detail") return;
+    void handleLoadSavedLookPreview(target, { syncUrl: false });
+  }, [
+    initialSavedLookId,
+    hasLoadedSavedLooksOnce,
+    savedLooksLoading,
+    savedManualLooks,
+    savedPreviewLookId,
+    savedTabView,
+  ]);
+
   return (
     <div className="min-h-[calc(100vh-4rem)] min-h-[calc(100dvh-4rem)] bg-slate-100 p-4 md:p-6">
       <CommandDialog
@@ -1583,8 +1635,9 @@ export default function AiLookClient() {
       </CommandDialog>
 
       <div className="mx-auto w-full max-w-6xl space-y-6">
-        <div className="border-b border-slate-300">
-          <div role="tablist" aria-label="Looks modes" className="flex items-end gap-6">
+        {!isStandaloneSavedLookPage ? (
+          <div className="border-b border-slate-300">
+            <div role="tablist" aria-label="Looks modes" className="flex items-end gap-6">
             <button
               type="button"
               role="tab"
@@ -1657,8 +1710,9 @@ export default function AiLookClient() {
             >
               Pack for Travel
             </button>
+            </div>
           </div>
-        </div>
+        ) : null}
 
         <div
           id="looks-main-panel"
@@ -1904,7 +1958,6 @@ export default function AiLookClient() {
               <div className="space-y-3">
                 {savedTabView === "list" ? (
                   <div className="flex items-center justify-between gap-2">
-                    {savedLooksLoading && <span className="text-xs text-slate-500">Loading...</span>}
                   </div>
                 ) : null}
                 {savedLooksError && <p className="text-sm text-red-600">{savedLooksError}</p>}
@@ -1912,19 +1965,28 @@ export default function AiLookClient() {
                 {error && <p className="text-sm text-red-600">{error}</p>}
                 {savedTabView === "list" ? (
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    <button
-                      type="button"
-                      onClick={() => setActiveMode("single")}
-                      className="group flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-6 py-8 text-center transition hover:border-slate-400 hover:bg-slate-50"
-                      aria-label="Add new look"
-                    >
-                      <span className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full border border-slate-300 bg-white text-2xl leading-none text-slate-700 transition group-hover:border-slate-500 group-hover:text-slate-900">
-                        +
-                      </span>
-                      <p className="text-sm font-semibold text-slate-900">Add New Look</p>
-                    </button>
+                    {shouldShowSavedLooksLoading ? (
+                      <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-8">
+                        <div className="flex min-h-[320px] flex-col items-center justify-center">
+                          <Skeleton className="mb-3 h-12 w-12 rounded-full" />
+                          <Skeleton className="h-4 w-28" />
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setActiveMode("single")}
+                        className="group flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-6 py-8 text-center transition hover:border-slate-400 hover:bg-slate-50"
+                        aria-label="Add new look"
+                      >
+                        <span className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full border border-slate-300 bg-white text-2xl leading-none text-slate-700 transition group-hover:border-slate-500 group-hover:text-slate-900">
+                          +
+                        </span>
+                        <p className="text-sm font-semibold text-slate-900">Add New Look</p>
+                      </button>
+                    )}
 
-                    {savedLooksLoading
+                    {shouldShowSavedLooksLoading
                       ? Array.from({ length: 5 }).map((_, index) => (
                           <div key={`favorite-look-card-skeleton-${index}`} className="rounded-lg border bg-white px-3 py-7">
                             <Skeleton className="mx-auto aspect-[3/4] w-[86%] rounded-md" />
@@ -1975,7 +2037,6 @@ export default function AiLookClient() {
                       >
                         &larr; Back to Favorite Looks
                       </button>
-                      {savedPreviewLoading ? <span className="text-xs text-slate-500">Loading preview...</span> : null}
                     </div>
                     {savedPreviewLoading ? (
                       <div className="space-y-5">

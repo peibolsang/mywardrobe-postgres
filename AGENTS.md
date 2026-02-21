@@ -63,6 +63,7 @@ Use imperative commit subjects.
    - From garment details (owner view), `Cmd/Ctrl+K` opens garment actions including `Generate look around this garment`, which routes to `/looks?anchorGarmentId=<id>&anchorMode=strict`.
    - From garment details (owner view), `Cmd/Ctrl+K` also includes `Add To Changing Room`, which stores the garment in browser-local Selection.
    - `/looks` includes four tabs: `Favorite Looks` (default), `Create New Look`, `Pack for Travel`, and `Changing Room` (manual look curation: 2-8 garments + `Try on me` + save look).
+   - Favorite look detail is deep-linkable at `/looks/[id]`. Clicking a look title routes to that URL; `Back to Favorite Looks` returns to `/looks`.
    - `Create New Look` results also expose `Try on me`, which uses the same manual try-on pipeline.
 8. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
 
@@ -124,7 +125,7 @@ Use imperative commit subjects.
 - `EDITOR_OWNER_EMAIL` is the single source of truth for editor authorization.
 - Route-level protection:
   - `/garments/[id]` (full detail and intercept modal) requires authenticated session; unauthenticated users are redirected to `/login`.
-  - `/editor`, `/add-garment`, `/looks`, and `/profile` require authenticated owner session, otherwise redirect (`/login`) or `notFound()`.
+  - `/editor`, `/add-garment`, `/looks`, `/looks/[id]`, and `/profile` require authenticated owner session, otherwise redirect (`/login`) or `notFound()`.
   - `/editor` accepts optional query param `garmentId` to initialize the editor on a specific garment.
   - Garment details (`/garments/[id]`) only render the `Edit` action card in UI for owner sessions.
 - Middleware-level protection:
