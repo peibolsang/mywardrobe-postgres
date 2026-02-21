@@ -25,14 +25,18 @@ const deleteManualLookSchema = z.object({
 }).strict();
 
 const TRUSTED_BLOB_HOST_SUFFIX = ".public.blob.vercel-storage.com";
+const TRUSTED_BLOB_HOST = process.env.BLOB_PUBLIC_HOST?.trim().toLowerCase() ?? "";
 
 const dedupeIds = (ids: number[]): number[] => Array.from(new Set(ids));
 
 const isTrustedGeneratedImageUrl = (value: string): boolean => {
+  if (!TRUSTED_BLOB_HOST) return false;
+
   try {
     const parsed = new URL(value);
     if (parsed.protocol !== "https:") return false;
     const hostname = parsed.hostname.toLowerCase();
+    if (hostname !== TRUSTED_BLOB_HOST) return false;
     return (
       hostname.endsWith(TRUSTED_BLOB_HOST_SUFFIX) &&
       hostname.length > TRUSTED_BLOB_HOST_SUFFIX.length
@@ -74,13 +78,20 @@ export async function POST(request: Request) {
     }
 
     const ownerKey = getOwnerKey();
+    if (!TRUSTED_BLOB_HOST) {
+      console.error("BLOB_PUBLIC_HOST is not configured.");
+      return NextResponse.json(
+        { error: "Server misconfiguration: missing trusted blob host." },
+        { status: 500 }
+      );
+    }
     const garmentIds = dedupeIds(parsed.data.garmentIds);
     if (garmentIds.length < 2 || garmentIds.length > 8) {
       return NextResponse.json({ error: "Manual look must include between 2 and 8 unique garments." }, { status: 400 });
     }
     if (!isTrustedGeneratedImageUrl(parsed.data.generatedImageUrl)) {
       return NextResponse.json(
-        { error: "generatedImageUrl must be an HTTPS Vercel Blob URL from this workspace." },
+        { error: "generatedImageUrl must be an HTTPS URL from the configured trusted blob host." },
         { status: 400 }
       );
     }

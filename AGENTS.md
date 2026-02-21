@@ -42,7 +42,7 @@ Use imperative commit subjects.
 
 ## Security & Configuration Tips
 - Keep secrets in `.env.development.local`; never commit credentials.
-- Required env vars used in code include: `DATABASE_URL`, `EDITOR_OWNER_EMAIL`, `AUTH_SECRET`, and `AUTH_RESEND_KEY`.
+- Required env vars used in code include: `DATABASE_URL`, `EDITOR_OWNER_EMAIL`, `AUTH_SECRET`, `AUTH_RESEND_KEY`, and `BLOB_PUBLIC_HOST` (trusted Vercel Blob hostname for remote image allow-list + manual-look URL validation).
 - Never expose server-only secrets (for example `DATABASE_URL`) through `next.config.ts` `env`; read them only from server runtime (`process.env`) in server-only modules/routes/actions.
 - User-provided persisted image URLs (for example saved manual looks) must be validated against trusted storage hosts (Vercel Blob) before persistence/rendering.
 - Owner-only capabilities are enforced server-side. Use `lib/owner.ts` (`isOwnerSession`) for any new editor/admin route, API endpoint, or mutation.

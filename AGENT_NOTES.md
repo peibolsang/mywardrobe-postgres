@@ -146,6 +146,7 @@
 - Security fix note: Removed `DATABASE_URL` from `next.config.ts` public `env` injection and tightened `images.remotePatterns` from wildcard hosts to Vercel Blob host pattern only.
 - Input hardening note: `/api/looks/manual/saved` now rejects non-HTTPS/non-Vercel-Blob `generatedImageUrl` values before persistence, reducing server-side remote image fetch abuse risk.
 - CSRF parity note: Added same-origin validation to `POST /api/upload` so upload token issuance matches other owner-only mutation endpoints.
+- Strict host-scoping note: Switched from suffix-only blob validation to exact configured host enforcement via `BLOB_PUBLIC_HOST`, and aligned `next.config.ts` image allow-list to the same exact host.
 - Rules v2 implementation note: Added deterministic structured weather profiles across single/travel (`tempBand`, precipitation, wind, humidity, wet-surface risk, confidence) and threaded them into scoring, normalization, and observability logs.
 - Rules v2 priority note: Enforced category-aware hard constraints with explicit priority (`weather` first, then `occasion/place`, then `time`, then `style/formality`) and added wet-material hard conflict blocking for outerwear/footwear in high wet-risk conditions.
 - Feedback loop note: Implemented owner-only `POST /api/ai-look/feedback` plus manual Neon SQL migration `scripts/sql/create-ai-look-feedback.sql`; `/ai-look` UI now captures thumbs up/down feedback with optional downvote reason for both single and travel day cards.
