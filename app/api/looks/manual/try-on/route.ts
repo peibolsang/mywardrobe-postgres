@@ -14,6 +14,7 @@ const FALLBACK_LOCATION_LABEL = "New York City, USA";
 const FALLBACK_WEATHER_SUMMARY = "Mild, neutral overcast daylight conditions.";
 const OPEN_WEATHER_URL_CURRENT = "https://api.openweathermap.org/data/2.5/weather";
 const OPEN_WEATHER_URL_GEOCODE = "https://api.openweathermap.org/geo/1.0/direct";
+const PROFILE_BODY_PHOTO_REQUIRED = "PROFILE_BODY_PHOTO_REQUIRED";
 
 const tryOnRequestSchema = z.object({
   garmentIds: z.array(z.number().int().positive()).min(2).max(8),
@@ -170,6 +171,7 @@ const buildTryOnPrompt = ({
     model: string;
     brand: string;
     type: string;
+    imageUrl: string;
     features: string;
     material: string;
     style: string;
@@ -179,12 +181,13 @@ const buildTryOnPrompt = ({
 }): string => {
   const garmentList = garments
     .map((garment, index) =>
-      `${index + 1}. ${garment.type} - ${garment.model} by ${garment.brand}; material: ${garment.material}; style tags: ${garment.style}; features: ${garment.features}`
+      `${index + 1}. ${garment.type} - ${garment.model} by ${garment.brand}; image url: ${garment.imageUrl || "unavailable"}; material: ${garment.material}; style tags: ${garment.style}; features: ${garment.features}`
     )
     .join("\n");
 
   return [
-    "Create one photorealistic full-body image of a 45-year-old man wearing the complete outfit listed below.",
+    "Create one photorealistic full-body image of the exact same person from the provided reference body photo.",
+    "Identity preservation is mandatory: keep face, body shape, skin tone, and age characteristics consistent with the reference photo.",
     "Keep all listed garments visible and faithfully represented.",
     "FRAMING REQUIREMENT (MANDATORY): Head-to-toe full-body shot, with the entire head and both shoes fully visible.",
     "Leave small empty margins above the head and below the shoes so no body parts are cropped.",
@@ -198,24 +201,51 @@ const buildTryOnPrompt = ({
   ].join("\n\n");
 };
 
-const generateImageBytes = async (prompt: string): Promise<Buffer> => {
+const generateImageBytesWithReference = async ({
+  prompt,
+  bodyPhotoUrl,
+}: {
+  prompt: string;
+  bodyPhotoUrl: string;
+}): Promise<Buffer> => {
   const apiKey = normalize(process.env.OPENAI_API_KEY);
   if (!apiKey) {
     throw new Error("Missing OPENAI_API_KEY");
   }
 
-  const imageResponse = await fetch("https://api.openai.com/v1/images/generations", {
+  const referenceResponse = await fetch(bodyPhotoUrl, { cache: "no-store" });
+  if (!referenceResponse.ok) {
+    throw new Error("Failed to load profile body photo.");
+  }
+
+  const contentType = normalize(referenceResponse.headers.get("content-type")).toLowerCase();
+  const normalizedContentType =
+    contentType.includes("png")
+      ? "image/png"
+      : contentType.includes("webp")
+        ? "image/webp"
+        : "image/jpeg";
+
+  const referenceBuffer = Buffer.from(await referenceResponse.arrayBuffer());
+  const formData = new FormData();
+  formData.append("model", "gpt-image-1.5");
+  formData.append("prompt", prompt);
+  formData.append("size", "1024x1536");
+  formData.append("n", "1");
+  formData.append(
+    "image",
+    new Blob([referenceBuffer], {
+      type: normalizedContentType,
+    }),
+    `profile-body-photo.${normalizedContentType === "image/png" ? "png" : normalizedContentType === "image/webp" ? "webp" : "jpg"}`
+  );
+
+  const imageResponse = await fetch("https://api.openai.com/v1/images/edits", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model: "gpt-image-1",
-      prompt,
-      size: "1024x1536",
-      n: 1,
-    }),
+    body: formData,
   });
 
   if (!imageResponse.ok) {
@@ -289,13 +319,24 @@ export async function POST(request: Request) {
     }
 
     const profile = await getUserProfileByOwnerKey(ownerKey);
-    const weatherContext = await resolveWeatherContext(profile?.defaultLocation ?? null);
+    if (!profile?.bodyPhotoUrl) {
+      return responseJson(
+        {
+          error: "Please upload your full-body photo in Profile before using Try it.",
+          errorCode: PROFILE_BODY_PHOTO_REQUIRED,
+        },
+        { status: 422 }
+      );
+    }
+
+    const weatherContext = await resolveWeatherContext(profile.defaultLocation ?? null);
 
     const prompt = buildTryOnPrompt({
       garments: selectedGarments.map((garment) => ({
         model: garment.model,
         brand: garment.brand,
         type: garment.type,
+        imageUrl: normalize(garment.file_name),
         features: normalize(garment.features),
         material: (garment.material_composition ?? [])
           .map((entry) => `${entry.material} ${entry.percentage}%`)
@@ -311,7 +352,10 @@ export async function POST(request: Request) {
       weatherSummary: weatherContext.weatherSummary,
     });
 
-    const imageBytes = await generateImageBytes(prompt);
+    const imageBytes = await generateImageBytesWithReference({
+      prompt,
+      bodyPhotoUrl: profile.bodyPhotoUrl,
+    });
 
     const blob = await put(
       `manual-looks/${sanitizeOwnerKey(ownerKey)}/try-on-${Date.now()}.png`,

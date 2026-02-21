@@ -56,11 +56,12 @@ Use imperative commit subjects.
 3. From garment detail (`/garments/[id]`), use the `Edit` action card to open owner-only edit mode for that specific garment (`/editor?garmentId=<id>`); after saving changes, the user is redirected back to the same garment detail read-only view and shown a success toast.
 4. Add new garments via `/add-garment` (owner-only), including image upload.
 5. View distribution analytics in `/stats`.
-6. Configure profile settings in `/profile` (owner-only), including `Default Location`, favorite style selections, and saved menswear references used by AI Look tooling/directive flows.
+6. Configure profile settings in `/profile` (owner-only), including `Default Location`, uploaded full-body photo (for try-on identity), favorite style selections, and saved menswear references used by AI Look tooling/directive flows.
 7. Generate AI recommendations via `/looks` (owner-only): either a single free-text look or a multi-day "Pack for Travel" plan (destination + date range + reason).
    - From garment details (owner view), `Cmd/Ctrl+K` opens garment actions including `Generate look around this garment`, which routes to `/looks?anchorGarmentId=<id>&anchorMode=strict`.
    - From garment details (owner view), `Cmd/Ctrl+K` also includes `Add To Look`, which stores the garment in browser-local Selection.
    - `/looks` includes a `Selection` tab for manual look curation (2-8 garments), `Try it` image generation, and saving liked manual looks.
+   - `Expert` look results also expose `Try on me`, which uses the same manual try-on pipeline.
 8. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
 
 ## Rendering strategy
@@ -68,11 +69,12 @@ Use imperative commit subjects.
 2. Client components (`components/client/*` and interactive feature components) manage filters, dialogs, local form state, toasts, and URL state.
 3. Server actions (`actions/garment.ts`) own write operations, authorization checks, redirects, and cache invalidation.
 4. Editor pages (`/editor`, `/add-garment`) preload wardrobe/schema/editor-options server-side and render `EditorForm` inside `Suspense` with a layout-matching skeleton fallback to avoid empty-state flash and layout shift.
-5. Profile page (`/profile`) is route-guarded server-side (owner-only), hydrates owner defaults + style preferences + saved references, and persists via `/api/profile`, `/api/profile/styles`, and `/api/profile/references`.
+5. Profile page (`/profile`) is route-guarded server-side (owner-only), hydrates owner defaults + body photo + style preferences + saved references, and persists via `/api/profile`, `/api/profile/body-photo`, `/api/profile/styles`, and `/api/profile/references`.
 6. AI look page (`/looks`) is route-guarded server-side and renders a client UI with three tabs: (a) free-text single-look generation (`Expert`), (b) "Pack for Travel" planning, and (c) `Selection` manual look mode.
    - Single-look prompt includes an `Add Tool` control that lets the user attach explicit `Style` and `Reference` selections as removable chips per request.
 7. `/api/looks` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
    - Manual Selection APIs are separate owner-only endpoints: `/api/looks/manual/try-on` and `/api/looks/manual/saved`.
+   - `/api/looks/manual/try-on` requires `user_profile.body_photo_url`; if missing, it returns 422 with `errorCode: PROFILE_BODY_PHOTO_REQUIRED`.
 8. Single-look mode uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) multi-candidate look generation constrained to wardrobe IDs, followed by server-side validation, normalization, reranking, and one final look selection.
    - Step 1 is context-first (`weather`, `occasion`, `place`, `timeOfDay`, `notes`); server deterministically derives `formality`, `style`, and material targets from context + structured weather profile before Step 2.
    - Step 2 receives deterministic `weatherProfile` + `derivedProfile` scaffolding; final selection enforces category-aware hard constraints with explicit priority (`weather > occasion/place > time > style`).
@@ -114,6 +116,7 @@ Use imperative commit subjects.
 7. Manual Selection mode: `/looks` `Selection` tab renders browser-local garment selection (2-8 garments), supports `Try it` image generation via `/api/looks/manual/try-on`, and allows persisting liked results via `/api/looks/manual/saved`.
    - Temporary Selection state is browser-local only.
    - Saved manual looks are owner-scoped DB records (title + garment IDs + generated image + weather/location context).
+   - Try-on image generation is identity-conditioned from owner profile body photo and enforces uncropped full-body framing in prompt.
 
 ## Authorization strategy
 - `EDITOR_OWNER_EMAIL` is the single source of truth for editor authorization.
@@ -127,7 +130,7 @@ Use imperative commit subjects.
 - API-level protection:
   - `/api/wardrobe`, `/api/editor-options`, `/api/upload`, and `/api/looks` require authenticated owner session (`403` on failure).
   - `/api/looks/manual/try-on` and `/api/looks/manual/saved` require authenticated owner session (`403` on failure).
-  - `/api/profile`, `/api/profile/styles`, `/api/profile/references` (`GET`/`POST`/`DELETE`), and `/api/profile/references/catalog` require authenticated owner session (`403` on failure).
+  - `/api/profile`, `/api/profile/body-photo`, `/api/profile/styles`, `/api/profile/references` (`GET`/`POST`/`DELETE`), and `/api/profile/references/catalog` require authenticated owner session (`403` on failure).
   - `/api/looks/feedback` also requires authenticated owner session (`403` on failure).
 - Mutation-level protection:
   - `createGarment`, `updateGarment`, and `deleteGarment` enforce owner checks server-side regardless of UI access.
@@ -139,7 +142,7 @@ Use imperative commit subjects.
   - max request count per rolling time window
 - `AUTH_EMAIL_FROM` can be used to configure sender address; fallback is `onboarding@resend.dev`.
 - AI recommendation API hardening (`/api/looks`) includes same-origin POST validation and owner-scoped persistent DB-backed rate limiting (minute + hour windows) with in-memory fallback only if the DB limiter is unavailable, to reduce abuse risk and OpenAI cost exposure.
-- Profile mutation API hardening includes same-origin validation on `POST`/`DELETE` for `/api/profile`, `/api/profile/styles`, and `/api/profile/references`.
+- Profile mutation API hardening includes same-origin validation on `POST`/`DELETE` for `/api/profile`, `/api/profile/body-photo`, `/api/profile/styles`, and `/api/profile/references`.
 
 ## Caching strategy: 
 - Shared wardrobe reads are centralized in `lib/wardrobe.ts` via `getWardrobeData()`.
@@ -274,8 +277,8 @@ Most likely with a **composite primary key** on `(garment_id, *_id)`.
 ### Profile Table
 
 * `user_profile`
-  * owner-scoped defaults (`owner_key`, `default_location`, `created_at`, `updated_at`)
-  * provisioned via explicit SQL migration script `scripts/sql/create-user-profile.sql`
+  * owner-scoped defaults + try-on identity photo (`owner_key`, `default_location`, `body_photo_url`, `created_at`, `updated_at`)
+  * provisioned via explicit SQL migration scripts `scripts/sql/create-user-profile.sql` and `scripts/sql/add-user-profile-body-photo.sql`
 
 ### AI Memory Tables
 

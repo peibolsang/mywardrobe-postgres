@@ -410,14 +410,14 @@ export default function GarmentDetailsClient({
 
                   {showAddToLookAction && (
                   <CommandItem
-                    value="Add To Look"
+                    value="Add To Changing Room"
                     keywords={["add", "to", "look", "selection", "manual"]}
                     onSelect={handleAddToLook}
                   >
                     <div className="flex w-full items-center justify-between gap-3">
                       <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
                         <ListPlus className="size-4 shrink-0 text-gray-500" />
-                        <span className="truncate">Add To Look</span>
+                        <span className="truncate">Add To Changing Room</span>
                       </span>
                       <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
                         A

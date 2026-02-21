@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState, useTransition } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -13,6 +14,7 @@ import { cn } from "@/lib/utils";
 
 interface ProfileSettingsClientProps {
   initialDefaultLocation: string;
+  initialBodyPhotoUrl: string;
   initialStyleCatalog: ProfileStyleOption[];
   initialSelectedStyleKeys: string[];
   initialReferences: ProfileReferenceOption[];
@@ -38,7 +40,10 @@ interface ProfileReferenceOption {
   formalityBias: string | null;
 }
 
-type ProfileSection = "default-location" | "favorite-styles" | "menswear-references";
+type ProfileSection = "default-location" | "body-photo" | "favorite-styles" | "menswear-references";
+
+const MAX_BODY_PHOTO_BYTES = 10 * 1024 * 1024;
+const ALLOWED_BODY_PHOTO_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 const STYLE_BIAS_OPTIONS = [
   "sporty",
@@ -103,12 +108,18 @@ const normalizeReferenceKey = (value: string): string =>
 
 export default function ProfileSettingsClient({
   initialDefaultLocation,
+  initialBodyPhotoUrl,
   initialStyleCatalog,
   initialSelectedStyleKeys,
   initialReferences,
 }: ProfileSettingsClientProps) {
   const [activeSection, setActiveSection] = useState<ProfileSection>("default-location");
   const [defaultLocation, setDefaultLocation] = useState(initialDefaultLocation);
+  const [bodyPhotoUrl, setBodyPhotoUrl] = useState(initialBodyPhotoUrl);
+  const [bodyPhotoFile, setBodyPhotoFile] = useState<File | null>(null);
+  const [bodyPhotoInputKey, setBodyPhotoInputKey] = useState(0);
+  const [isUploadingBodyPhoto, setIsUploadingBodyPhoto] = useState(false);
+  const [isRemovingBodyPhoto, setIsRemovingBodyPhoto] = useState(false);
   const [styleCatalog] = useState(initialStyleCatalog);
   const [selectedStyleKeys, setSelectedStyleKeys] = useState(
     dedupeStyleKeys(initialSelectedStyleKeys)
@@ -130,6 +141,8 @@ export default function ProfileSettingsClient({
   const [isDeletingReference, setIsDeletingReference] = useState<string | null>(null);
 
   const [isPending, startTransition] = useTransition();
+
+  const isBodyPhotoBusy = isUploadingBodyPhoto || isRemovingBodyPhoto;
 
   const toggleStyleSelection = (styleKey: string) => {
     setSelectedStyleKeys((current) => {
@@ -198,6 +211,94 @@ export default function ProfileSettingsClient({
         toast.error(message);
       }
     });
+  };
+
+  const onBodyPhotoFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    if (!file) {
+      setBodyPhotoFile(null);
+      return;
+    }
+
+    if (!ALLOWED_BODY_PHOTO_MIME.has(file.type)) {
+      toast.error("Body photo must be JPG, PNG, or WEBP.");
+      setBodyPhotoFile(null);
+      setBodyPhotoInputKey((current) => current + 1);
+      return;
+    }
+
+    if (file.size <= 0 || file.size > MAX_BODY_PHOTO_BYTES) {
+      toast.error("Body photo must be smaller than 10MB.");
+      setBodyPhotoFile(null);
+      setBodyPhotoInputKey((current) => current + 1);
+      return;
+    }
+
+    setBodyPhotoFile(file);
+  };
+
+  const uploadBodyPhoto = async () => {
+    if (!bodyPhotoFile) {
+      toast.error("Select a full-body photo first.");
+      return;
+    }
+
+    setIsUploadingBodyPhoto(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", bodyPhotoFile);
+      const response = await fetch("/api/profile/body-photo", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        bodyPhotoUrl?: string | null;
+      } | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Failed to upload body photo.");
+      }
+
+      setBodyPhotoUrl(payload?.bodyPhotoUrl ?? "");
+      setBodyPhotoFile(null);
+      setBodyPhotoInputKey((current) => current + 1);
+      toast.success("Body photo updated.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to upload body photo.";
+      toast.error(message);
+    } finally {
+      setIsUploadingBodyPhoto(false);
+    }
+  };
+
+  const removeBodyPhoto = async () => {
+    if (!bodyPhotoUrl) {
+      return;
+    }
+
+    setIsRemovingBodyPhoto(true);
+    try {
+      const response = await fetch("/api/profile/body-photo", {
+        method: "DELETE",
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        bodyPhotoUrl?: string | null;
+      } | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Failed to remove body photo.");
+      }
+
+      setBodyPhotoUrl(payload?.bodyPhotoUrl ?? "");
+      setBodyPhotoFile(null);
+      setBodyPhotoInputKey((current) => current + 1);
+      toast.success("Body photo removed.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to remove body photo.";
+      toast.error(message);
+    } finally {
+      setIsRemovingBodyPhoto(false);
+    }
   };
 
   const onEditReference = (reference: ProfileReferenceOption) => {
@@ -396,10 +497,19 @@ export default function ProfileSettingsClient({
               </Button>
               <Button
                 type="button"
+                variant={activeSection === "body-photo" ? "secondary" : "ghost"}
+                className="justify-start"
+                onClick={() => setActiveSection("body-photo")}
+                disabled={isPending || isBodyPhotoBusy}
+              >
+                Body Photo
+              </Button>
+              <Button
+                type="button"
                 variant={activeSection === "favorite-styles" ? "secondary" : "ghost"}
                 className="justify-start"
                 onClick={() => setActiveSection("favorite-styles")}
-                disabled={isPending}
+                disabled={isPending || isBodyPhotoBusy}
               >
                 Favorite Styles
               </Button>
@@ -408,7 +518,7 @@ export default function ProfileSettingsClient({
                 variant={activeSection === "menswear-references" ? "secondary" : "ghost"}
                 className="justify-start"
                 onClick={() => setActiveSection("menswear-references")}
-                disabled={isPending}
+                disabled={isPending || isBodyPhotoBusy}
               >
                 Menswear References
               </Button>
@@ -428,6 +538,68 @@ export default function ProfileSettingsClient({
                     onChange={(event) => setDefaultLocation(event.target.value)}
                     maxLength={160}
                   />
+                </div>
+              ) : null}
+
+              {activeSection === "body-photo" ? (
+                <div className="space-y-3">
+                  <Label htmlFor="body-photo-input">Try-On Body Photo</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Upload one clear full-body photo of yourself. Looks `Try it` uses this as identity input.
+                  </p>
+
+                  <div className="rounded-md border border-slate-200 bg-white p-3">
+                    {bodyPhotoUrl ? (
+                      <div className="space-y-2">
+                        <div className="relative h-72 overflow-hidden rounded-md bg-slate-100">
+                          <Image
+                            src={bodyPhotoUrl}
+                            alt="Current profile body photo"
+                            fill
+                            sizes="(max-width: 768px) 100vw, 600px"
+                            className="object-contain"
+                          />
+                        </div>
+                        <p className="text-xs text-slate-600">Current photo is active for try-on generation.</p>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-600">No body photo uploaded yet.</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Input
+                      key={bodyPhotoInputKey}
+                      id="body-photo-input"
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={onBodyPhotoFileChange}
+                      disabled={isBodyPhotoBusy}
+                    />
+                    {bodyPhotoFile ? (
+                      <p className="text-xs text-slate-600">
+                        Selected: {bodyPhotoFile.name}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      onClick={() => void uploadBodyPhoto()}
+                      disabled={!bodyPhotoFile || isBodyPhotoBusy}
+                    >
+                      {isUploadingBodyPhoto ? "Uploading..." : "Upload Photo"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void removeBodyPhoto()}
+                      disabled={!bodyPhotoUrl || isBodyPhotoBusy}
+                    >
+                      {isRemovingBodyPhoto ? "Removing..." : "Remove Photo"}
+                    </Button>
+                  </div>
                 </div>
               ) : null}
 
@@ -778,7 +950,7 @@ export default function ProfileSettingsClient({
                 </div>
               ) : null}
 
-              {activeSection !== "menswear-references" ? (
+              {activeSection !== "menswear-references" && activeSection !== "body-photo" ? (
                 <div className="flex justify-end">
                   <Button type="button" disabled={isPending} onClick={onSave}>
                     {isPending ? "Saving..." : "Save Profile"}

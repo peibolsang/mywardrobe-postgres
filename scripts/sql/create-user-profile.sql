@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS user_profile (
   id BIGSERIAL PRIMARY KEY,
   owner_key TEXT NOT NULL UNIQUE,
   default_location TEXT,
+  body_photo_url TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

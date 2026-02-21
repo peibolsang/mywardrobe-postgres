@@ -20,6 +20,7 @@ export async function GET() {
 
     return NextResponse.json({
       defaultLocation: profile?.defaultLocation ?? null,
+      bodyPhotoUrl: profile?.bodyPhotoUrl ?? null,
       updatedAt: profile?.updatedAt ?? null,
     });
   } catch (error) {
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
       defaultLocation: profile.defaultLocation,
+      bodyPhotoUrl: profile.bodyPhotoUrl,
       updatedAt: profile.updatedAt,
     });
   } catch (error) {

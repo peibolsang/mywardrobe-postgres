@@ -22,6 +22,7 @@ export default async function ProfilePage() {
   }
 
   let defaultLocation = "";
+  let bodyPhotoUrl = "";
   let styleCatalog: Array<{
     key: string;
     name: string;
@@ -50,6 +51,7 @@ export default async function ProfilePage() {
       getUserProfileActiveReferences(ownerKey),
     ]);
     defaultLocation = profile?.defaultLocation ?? "";
+    bodyPhotoUrl = profile?.bodyPhotoUrl ?? "";
     styleCatalog = catalog;
     selectedStyleKeys = selectedStyles.map((style) => style.key);
     references = activeReferences;
@@ -60,6 +62,7 @@ export default async function ProfilePage() {
   return (
     <ProfileSettingsClient
       initialDefaultLocation={defaultLocation}
+      initialBodyPhotoUrl={bodyPhotoUrl}
       initialStyleCatalog={styleCatalog}
       initialSelectedStyleKeys={selectedStyleKeys}
       initialReferences={references}
