@@ -57,8 +57,10 @@ Use imperative commit subjects.
 4. Add new garments via `/add-garment` (owner-only), including image upload.
 5. View distribution analytics in `/stats`.
 6. Configure profile settings in `/profile` (owner-only), including `Default Location`, favorite style selections, and saved menswear references used by AI Look tooling/directive flows.
-7. Generate AI recommendations via `/ai-look` (owner-only): either a single free-text look or a multi-day "Pack for Travel" plan (destination + date range + reason).
-   - From garment details (owner view), `Cmd/Ctrl+K` opens garment actions including `Generate look around this garment`, which routes to `/ai-look?anchorGarmentId=<id>&anchorMode=strict`.
+7. Generate AI recommendations via `/looks` (owner-only): either a single free-text look or a multi-day "Pack for Travel" plan (destination + date range + reason).
+   - From garment details (owner view), `Cmd/Ctrl+K` opens garment actions including `Generate look around this garment`, which routes to `/looks?anchorGarmentId=<id>&anchorMode=strict`.
+   - From garment details (owner view), `Cmd/Ctrl+K` also includes `Add To Look`, which stores the garment in browser-local Selection.
+   - `/looks` includes a `Selection` tab for manual look curation (2-8 garments), `Try it` image generation, and saving liked manual looks.
 8. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
 
 ## Rendering strategy
@@ -67,9 +69,10 @@ Use imperative commit subjects.
 3. Server actions (`actions/garment.ts`) own write operations, authorization checks, redirects, and cache invalidation.
 4. Editor pages (`/editor`, `/add-garment`) preload wardrobe/schema/editor-options server-side and render `EditorForm` inside `Suspense` with a layout-matching skeleton fallback to avoid empty-state flash and layout shift.
 5. Profile page (`/profile`) is route-guarded server-side (owner-only), hydrates owner defaults + style preferences + saved references, and persists via `/api/profile`, `/api/profile/styles`, and `/api/profile/references`.
-6. AI look page (`/ai-look`) is route-guarded server-side and renders a client UI with two tabs: (a) free-text single-look generation and (b) "Pack for Travel" planning.
+6. AI look page (`/looks`) is route-guarded server-side and renders a client UI with three tabs: (a) free-text single-look generation (`Expert`), (b) "Pack for Travel" planning, and (c) `Selection` manual look mode.
    - Single-look prompt includes an `Add Tool` control that lets the user attach explicit `Style` and `Reference` selections as removable chips per request.
-7. `/api/ai-look` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
+7. `/api/looks` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
+   - Manual Selection APIs are separate owner-only endpoints: `/api/looks/manual/try-on` and `/api/looks/manual/saved`.
 8. Single-look mode uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) multi-candidate look generation constrained to wardrobe IDs, followed by server-side validation, normalization, reranking, and one final look selection.
    - Step 1 is context-first (`weather`, `occasion`, `place`, `timeOfDay`, `notes`); server deterministically derives `formality`, `style`, and material targets from context + structured weather profile before Step 2.
    - Step 2 receives deterministic `weatherProfile` + `derivedProfile` scaffolding; final selection enforces category-aware hard constraints with explicit priority (`weather > occasion/place > time > style`).
@@ -78,7 +81,7 @@ Use imperative commit subjects.
 11. AI Look UI captures recommendation feedback (thumbs up/down + optional reason) and persists it via owner-only API for rule tuning.
 
 ## AI Look Agent (Mode Summary)
-1. Single-look interpretation: `/api/ai-look` maps free-text input into canonical wardrobe intent (`weather`, `occasion`, `place`, `timeOfDay`, `formality`, `style`) via structured output; the model can tool-call `getWeatherByLocation` for live weather context.
+1. Single-look interpretation: `/api/looks` maps free-text input into canonical wardrobe intent (`weather`, `occasion`, `place`, `timeOfDay`, `formality`, `style`) via structured output; the model can tool-call `getWeatherByLocation` for live weather context.
    - Single-look weather location resolution priority is `prompt location > profile default location > no-location fallback`; prompt date parsing is intentionally not used in single-look mode.
    - Single-look request payload now optionally accepts `selectedTools` (`[{ type: "style" | "reference", id: string }]`) from the AI Look `Add Tool` UI.
    - Directive merge precedence is deterministic: hard safety/context constraints first, then tool-selected directives, then free-text directives, then derived-profile fallback.
@@ -104,24 +107,28 @@ Use imperative commit subjects.
    - Travel mode now also uses persistence-backed cross-request diversity scoped by travel fingerprint (`destination + reason + startDate + endDate`) via table `ai_look_travel_day_history`; repeated day signatures are hard-avoided when alternatives exist and allowed only as graceful fallback.
    - `ai_look_travel_day_history` is provisioned via explicit SQL migration script `scripts/sql/create-ai-look-travel-day-history.sql` (no runtime auto-create).
    - Travel day rationale text is also generated server-side as concise intent-focused text from each finalized day lineup + interpreted day intent/weather, preventing post-normalization rationale drift.
-6. UI exposure: `/ai-look` shows both tabbed modes; single-look mode renders one selected look card, while travel output is rendered as per-day cards with skipped-day diagnostics.
-   - Single and travel cards expose thumbs up/down feedback controls; downvotes allow reason text and submit to `/api/ai-look/feedback`.
+6. UI exposure: `/looks` shows both tabbed modes; single-look mode renders one selected look card, while travel output is rendered as per-day cards with skipped-day diagnostics.
+   - Single and travel cards expose thumbs up/down feedback controls; downvotes allow reason text and submit to `/api/looks/feedback`.
    - AI look APIs include per-request `requestId` in JSON responses for log correlation.
    - Optional debug observability is controlled with `AI_LOOK_DEBUG=1`, which enables verbose structured AI-look logs.
+7. Manual Selection mode: `/looks` `Selection` tab renders browser-local garment selection (2-8 garments), supports `Try it` image generation via `/api/looks/manual/try-on`, and allows persisting liked results via `/api/looks/manual/saved`.
+   - Temporary Selection state is browser-local only.
+   - Saved manual looks are owner-scoped DB records (title + garment IDs + generated image + weather/location context).
 
 ## Authorization strategy
 - `EDITOR_OWNER_EMAIL` is the single source of truth for editor authorization.
 - Route-level protection:
   - `/garments/[id]` (full detail and intercept modal) requires authenticated session; unauthenticated users are redirected to `/login`.
-  - `/editor`, `/add-garment`, `/ai-look`, and `/profile` require authenticated owner session, otherwise redirect (`/login`) or `notFound()`.
+  - `/editor`, `/add-garment`, `/looks`, and `/profile` require authenticated owner session, otherwise redirect (`/login`) or `notFound()`.
   - `/editor` accepts optional query param `garmentId` to initialize the editor on a specific garment.
   - Garment details (`/garments/[id]`) only render the `Edit` action card in UI for owner sessions.
 - Middleware-level protection:
-  - `app/middleware.ts` applies auth gate on `/garments/*` (session required) and owner gate on `/editor/*` + `/ai-look/*` + `/profile/*` for defense-in-depth.
+  - `app/middleware.ts` applies auth gate on `/garments/*` (session required) and owner gate on `/editor/*` + `/looks/*` + `/profile/*` for defense-in-depth.
 - API-level protection:
-  - `/api/wardrobe`, `/api/editor-options`, `/api/upload`, and `/api/ai-look` require authenticated owner session (`403` on failure).
+  - `/api/wardrobe`, `/api/editor-options`, `/api/upload`, and `/api/looks` require authenticated owner session (`403` on failure).
+  - `/api/looks/manual/try-on` and `/api/looks/manual/saved` require authenticated owner session (`403` on failure).
   - `/api/profile`, `/api/profile/styles`, `/api/profile/references` (`GET`/`POST`/`DELETE`), and `/api/profile/references/catalog` require authenticated owner session (`403` on failure).
-  - `/api/ai-look/feedback` also requires authenticated owner session (`403` on failure).
+  - `/api/looks/feedback` also requires authenticated owner session (`403` on failure).
 - Mutation-level protection:
   - `createGarment`, `updateGarment`, and `deleteGarment` enforce owner checks server-side regardless of UI access.
 - Rule: UI guards are convenience; server-side guards are mandatory.
@@ -131,7 +138,7 @@ Use imperative commit subjects.
   - short cooldown between repeated requests per identifier
   - max request count per rolling time window
 - `AUTH_EMAIL_FROM` can be used to configure sender address; fallback is `onboarding@resend.dev`.
-- AI recommendation API hardening (`/api/ai-look`) includes same-origin POST validation and owner-scoped persistent DB-backed rate limiting (minute + hour windows) with in-memory fallback only if the DB limiter is unavailable, to reduce abuse risk and OpenAI cost exposure.
+- AI recommendation API hardening (`/api/looks`) includes same-origin POST validation and owner-scoped persistent DB-backed rate limiting (minute + hour windows) with in-memory fallback only if the DB limiter is unavailable, to reduce abuse risk and OpenAI cost exposure.
 - Profile mutation API hardening includes same-origin validation on `POST`/`DELETE` for `/api/profile`, `/api/profile/styles`, and `/api/profile/references`.
 
 ## Caching strategy: 
@@ -278,6 +285,12 @@ Most likely with a **composite primary key** on `(garment_id, *_id)`.
   * travel day recency memory (`owner_key`, `request_fingerprint`, `day_date`, `day_index`, `lineup_signature`, `garment_ids_json`, `created_at`)
 * `ai_look_feedback`
   * recommendation feedback memory (`owner_key`, `mode`, `request_fingerprint`, `lineup_signature`, `garment_ids_json`, `vote`, `reason_text`, `weather_profile_json`, `derived_profile_json`, `created_at`)
+
+### Manual Looks Table
+
+* `manual_look_saved`
+  * owner-scoped saved manual looks (`owner_key`, `title`, `garment_ids_json`, `generated_image_url`, `location_label`, `weather_summary`, `weather_source`, timestamps)
+  * provisioned via explicit SQL migration script `scripts/sql/create-manual-looks.sql`
 
 ### Profile Style Tables
 

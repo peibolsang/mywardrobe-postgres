@@ -4743,7 +4743,7 @@ const isRateLimited = async (baseKey: string): Promise<boolean> => {
     });
   } catch (error) {
     if (!hasLoggedRateLimitFallback) {
-      console.warn("Persistent AI look rate limiter unavailable; using in-memory fallback.", error);
+      console.warn("Persistent Looks rate limiter unavailable; using in-memory fallback.", error);
       hasLoggedRateLimitFallback = true;
     }
 
@@ -4825,14 +4825,14 @@ export async function POST(request: Request) {
     const parsedSingleBody = singleLookRequestSchema.safeParse(rawBody);
     if (!parsedTravelBody.success && !parsedSingleBody.success) {
       logWarn("[ai-look][request][invalid-payload]", { reason: "schema-parse-failed" });
-      return responseJson({ error: "Invalid AI look payload." }, { status: 400 });
+      return responseJson({ error: "Invalid Looks payload." }, { status: 400 });
     }
 
     const ownerRateLimitKey = getOwnerKey();
     if (await isRateLimited(ownerRateLimitKey)) {
       logWarn("[ai-look][request][rate-limited]", { ownerRateLimitKey });
       return responseJson(
-        { error: "Too many AI look requests. Please wait and try again." },
+        { error: "Too many Looks requests. Please wait and try again." },
         { status: 429 }
       );
     }
@@ -4845,7 +4845,7 @@ export async function POST(request: Request) {
     }
 
     const systemPrompt = await readFile(
-      path.join(process.cwd(), "app", "api", "ai-look", "prompt.md"),
+      path.join(process.cwd(), "app", "api", "looks", "prompt.md"),
       "utf-8"
     );
     const compactWardrobe: CompactGarment[] = wardrobeData.map((garment) => ({

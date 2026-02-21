@@ -4,7 +4,7 @@ import { FiHeart } from 'react-icons/fi';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, ArrowRight, Code2, Copy, Link2, Pencil, Search, Sparkles } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Code2, Copy, Link2, ListPlus, Pencil, Search, Sparkles } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/command';
 import { Toaster } from '@/components/ui/sonner';
 import { Garment, MaterialComposition } from '@/lib/types';
+import { addSelectionId, MAX_SELECTION_GARMENTS } from '@/lib/manual-look-selection';
 import { toast } from 'sonner';
 
 interface SchemaProperty {
@@ -117,7 +118,27 @@ export default function GarmentDetailsClient({
     setIsActionsOpen(false);
     setActionsSearchValue('');
     setActionsView('search');
-    router.push(`/ai-look?anchorGarmentId=${garment.id}&anchorMode=strict`);
+    router.push(`/looks?anchorGarmentId=${garment.id}&anchorMode=strict`);
+  };
+
+  const handleAddToLook = () => {
+    const result = addSelectionId(garment.id);
+    if (result.ok) {
+      toast.success('Added to Selection.');
+      setIsActionsOpen(false);
+      setActionsSearchValue('');
+      setActionsView('search');
+      return;
+    }
+    if (result.reason === 'duplicate') {
+      toast.info('Already in Selection.');
+      return;
+    }
+    if (result.reason === 'max') {
+      toast.error(`Selection can include up to ${MAX_SELECTION_GARMENTS} garments.`);
+      return;
+    }
+    toast.error('Could not add this garment to Selection.');
   };
 
   const handleEditFromCommand = () => {
@@ -264,6 +285,11 @@ export default function GarmentDetailsClient({
         handleGenerateAnchoredLook();
         return;
       }
+      if (canEdit && event.key === 'A') {
+        event.preventDefault();
+        handleAddToLook();
+        return;
+      }
       if (event.key === 'J') {
         event.preventDefault();
         handleOpenGarmentJson();
@@ -314,6 +340,7 @@ export default function GarmentDetailsClient({
   };
 
   const showGenerateLookAction = canEdit && actionMatches('generate look around this garment anchor ai');
+  const showAddToLookAction = canEdit && actionMatches('add to look selection manual look');
   const showEditAction = canEdit && actionMatches('edit this garment editor update');
   const showGarmentJsonAction = actionMatches('generate garment json export json');
   const showCopyLinkAction = actionMatches('copy garment link share url');
@@ -323,6 +350,7 @@ export default function GarmentDetailsClient({
   const showNoActionsFound =
     !showActionThresholdHint &&
     !showGenerateLookAction &&
+    !showAddToLookAction &&
     !showEditAction &&
     !showGarmentJsonAction &&
     !showCopyLinkAction &&
@@ -350,7 +378,7 @@ export default function GarmentDetailsClient({
         {actionsView === 'search' ? (
           <>
             <CommandInput
-              placeholder="Search actions... (E = Edit, G = Generate)"
+              placeholder="Search actions... (E = Edit, G = Generate, A = Add)"
               value={actionsSearchValue}
               onValueChange={setActionsSearchValue}
             />
@@ -360,7 +388,7 @@ export default function GarmentDetailsClient({
               ) : (
                 <CommandEmpty>No actions found</CommandEmpty>
               )}
-              {(showGenerateLookAction || showEditAction || showGarmentJsonAction || showCopyLinkAction || showNextGarmentAction || showPreviousGarmentAction || showFindMatchingPiecesAction) && (
+              {(showGenerateLookAction || showAddToLookAction || showEditAction || showGarmentJsonAction || showCopyLinkAction || showNextGarmentAction || showPreviousGarmentAction || showFindMatchingPiecesAction) && (
                 <CommandGroup heading="Actions">
                   {showGenerateLookAction && (
                   <CommandItem
@@ -375,6 +403,24 @@ export default function GarmentDetailsClient({
                       </span>
                       <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
                         G
+                      </span>
+                    </div>
+                  </CommandItem>
+                  )}
+
+                  {showAddToLookAction && (
+                  <CommandItem
+                    value="Add To Look"
+                    keywords={["add", "to", "look", "selection", "manual"]}
+                    onSelect={handleAddToLook}
+                  >
+                    <div className="flex w-full items-center justify-between gap-3">
+                      <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                        <ListPlus className="size-4 shrink-0 text-gray-500" />
+                        <span className="truncate">Add To Look</span>
+                      </span>
+                      <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                        A
                       </span>
                     </div>
                   </CommandItem>

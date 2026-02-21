@@ -19,6 +19,13 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  clearSelection,
+  getSelectionIds,
+  MAX_SELECTION_GARMENTS,
+  removeSelectionId,
+  setSelectionIds,
+} from "@/lib/manual-look-selection";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Plus } from "lucide-react";
@@ -127,7 +134,7 @@ interface TravelPlanResponse {
   };
 }
 
-type AiMode = "single" | "travel";
+type AiMode = "single" | "travel" | "selection";
 type AnchorMode = "strict" | "soft";
 type FeedbackVote = "up" | "down";
 type FeedbackStatus = "idle" | "submitting" | "submitted" | "error";
@@ -141,6 +148,31 @@ interface SelectedToolOption {
 interface ToolCatalogOption {
   id: string;
   label: string;
+}
+
+interface ManualTryOnContext {
+  locationLabel: string;
+  weatherSummary: string;
+  weatherSource: "live" | "fallback";
+}
+
+interface ManualTryOnResponse {
+  ok: boolean;
+  generatedImageUrl: string;
+  context: ManualTryOnContext;
+}
+
+interface ManualSavedLook {
+  id: number;
+  ownerKey: string;
+  title: string;
+  garmentIds: number[];
+  generatedImageUrl: string;
+  locationLabel: string;
+  weatherSummary: string;
+  weatherSource: "live" | "fallback";
+  createdAt: string;
+  updatedAt: string;
 }
 
 const isValidSingleLookResult = (value: unknown): value is SingleLookResult => {
@@ -209,6 +241,15 @@ export default function AiLookClient() {
   const [endDate, setEndDate] = useState("");
   const [reason, setReason] = useState<"Vacation" | "Office" | "Customer visit">("Vacation");
   const [travelResult, setTravelResult] = useState<TravelPlanResponse | null>(null);
+  const [selectionIds, setSelectionIdsState] = useState<number[]>([]);
+  const [selectionGarments, setSelectionGarments] = useState<LookGarment[]>([]);
+  const [selectionLoadError, setSelectionLoadError] = useState<string | null>(null);
+  const [manualTryOnImageUrl, setManualTryOnImageUrl] = useState<string | null>(null);
+  const [manualTryOnContext, setManualTryOnContext] = useState<ManualTryOnContext | null>(null);
+  const [manualLookTitle, setManualLookTitle] = useState("");
+  const [savedManualLooks, setSavedManualLooks] = useState<ManualSavedLook[]>([]);
+  const [savedLooksLoading, setSavedLooksLoading] = useState(false);
+  const [savedLooksError, setSavedLooksError] = useState<string | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMode, setLoadingMode] = useState<AiMode | null>(null);
@@ -239,6 +280,7 @@ export default function AiLookClient() {
 
   const isSingleLoading = isLoading && loadingMode === "single";
   const isTravelLoading = isLoading && loadingMode === "travel";
+  const isSelectionLoading = isLoading && loadingMode === "selection";
   const primaryLook = singleResult?.primaryLook ?? null;
 
   useEffect(() => {
@@ -335,6 +377,87 @@ export default function AiLookClient() {
     };
   }, [anchorGarmentId]);
 
+  const refreshSelectionFromStorage = async () => {
+    const ids = getSelectionIds();
+    setSelectionIdsState(ids);
+    setSelectionLoadError(null);
+
+    if (ids.length === 0) {
+      setSelectionGarments([]);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/wardrobe?fresh=1", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("Failed to load wardrobe.");
+      }
+      const wardrobe = await response.json() as Array<{
+        id: number;
+        model: string;
+        brand: string;
+        type: string;
+        file_name: string;
+      }>;
+      const garmentById = new Map(wardrobe.map((garment) => [garment.id, garment]));
+      const resolved = ids
+        .map((id) => garmentById.get(id))
+        .filter((garment): garment is {
+          id: number;
+          model: string;
+          brand: string;
+          type: string;
+          file_name: string;
+        } => Boolean(garment))
+        .map((garment) => ({
+          id: garment.id,
+          model: garment.model,
+          brand: garment.brand,
+          type: garment.type,
+          file_name: garment.file_name,
+        }));
+
+      setSelectionGarments(resolved);
+
+      if (resolved.length !== ids.length) {
+        const resolvedIds = resolved.map((garment) => garment.id);
+        setSelectionIds(resolvedIds);
+        setSelectionIdsState(resolvedIds);
+      }
+    } catch {
+      setSelectionLoadError("Could not load selected garments.");
+      setSelectionGarments([]);
+    }
+  };
+
+  const loadSavedManualLooks = async () => {
+    setSavedLooksLoading(true);
+    setSavedLooksError(null);
+    try {
+      const response = await fetch("/api/looks/manual/saved", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("Failed to load saved looks.");
+      }
+      const payload = (await response.json()) as { looks?: ManualSavedLook[] };
+      setSavedManualLooks(Array.isArray(payload.looks) ? payload.looks : []);
+    } catch {
+      setSavedLooksError("Could not load saved looks.");
+      setSavedManualLooks([]);
+    } finally {
+      setSavedLooksLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshSelectionFromStorage();
+  }, []);
+
+  useEffect(() => {
+    if (activeMode !== "selection") return;
+    void refreshSelectionFromStorage();
+    void loadSavedManualLooks();
+  }, [activeMode]);
+
   const handleClearAnchor = () => {
     const nextParams = new URLSearchParams(searchParams.toString());
     nextParams.delete("anchorGarmentId");
@@ -386,7 +509,7 @@ export default function AiLookClient() {
     derivedProfile?: DerivedProfile;
   }): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const response = await fetch("/api/ai-look/feedback", {
+      const response = await fetch("/api/looks/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -561,7 +684,7 @@ export default function AiLookClient() {
       if (selectedTools.length > 0) {
         payload.selectedTools = selectedTools;
       }
-      const response = await fetch("/api/ai-look", {
+      const response = await fetch("/api/looks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -618,7 +741,7 @@ export default function AiLookClient() {
     setTravelFeedbackStatuses({});
 
     try {
-      const response = await fetch("/api/ai-look", {
+      const response = await fetch("/api/looks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -648,6 +771,152 @@ export default function AiLookClient() {
     }
   };
 
+  const handleRemoveFromSelection = (garmentId: number) => {
+    removeSelectionId(garmentId);
+    setManualTryOnImageUrl(null);
+    setManualTryOnContext(null);
+    void refreshSelectionFromStorage();
+  };
+
+  const handleClearSelection = () => {
+    clearSelection();
+    setSelectionIdsState([]);
+    setSelectionGarments([]);
+    setManualTryOnImageUrl(null);
+    setManualTryOnContext(null);
+    setManualLookTitle("");
+    setSelectionLoadError(null);
+  };
+
+  const handleTryOnSelection = async () => {
+    if (selectionIds.length < 2 || selectionIds.length > MAX_SELECTION_GARMENTS) {
+      setError(`Selection must include 2 to ${MAX_SELECTION_GARMENTS} garments.`);
+      return;
+    }
+
+    setIsLoading(true);
+    setLoadingMode("selection");
+    setError(null);
+    setManualTryOnImageUrl(null);
+    setManualTryOnContext(null);
+
+    try {
+      const response = await fetch("/api/looks/manual/try-on", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          garmentIds: selectionIds,
+        }),
+      });
+
+      const payload = await response.json() as { error?: string } & Partial<ManualTryOnResponse>;
+      if (!response.ok) {
+        setError(payload.error || "Failed to generate try-on image.");
+        return;
+      }
+
+      if (!payload.generatedImageUrl || !payload.context) {
+        setError("Try-on response was incomplete.");
+        return;
+      }
+
+      setManualTryOnImageUrl(payload.generatedImageUrl);
+      setManualTryOnContext(payload.context);
+      if (!manualLookTitle.trim()) {
+        setManualLookTitle(`Manual Look - ${new Date().toISOString().slice(0, 10)}`);
+      }
+    } catch {
+      setError("Unexpected network error while generating the try-on image.");
+    } finally {
+      setIsLoading(false);
+      setLoadingMode(null);
+    }
+  };
+
+  const handleSaveManualLook = async () => {
+    if (!manualTryOnImageUrl || !manualTryOnContext) {
+      setError("Generate a try-on image before saving.");
+      return;
+    }
+    if (selectionIds.length < 2 || selectionIds.length > MAX_SELECTION_GARMENTS) {
+      setError(`Selection must include 2 to ${MAX_SELECTION_GARMENTS} garments before saving.`);
+      return;
+    }
+
+    const title = manualLookTitle.trim() || `Manual Look - ${new Date().toISOString().slice(0, 10)}`;
+    setIsLoading(true);
+    setLoadingMode("selection");
+    setError(null);
+
+    try {
+      const response = await fetch("/api/looks/manual/saved", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          garmentIds: selectionIds,
+          generatedImageUrl: manualTryOnImageUrl,
+          context: manualTryOnContext,
+        }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) {
+        setError(payload.error || "Failed to save manual look.");
+        return;
+      }
+
+      toast.success("Manual look saved.");
+      await loadSavedManualLooks();
+      handleClearSelection();
+    } catch {
+      setError("Unexpected network error while saving manual look.");
+    } finally {
+      setIsLoading(false);
+      setLoadingMode(null);
+    }
+  };
+
+  const handleDeleteSavedLook = async (id: number) => {
+    setIsLoading(true);
+    setLoadingMode("selection");
+    setError(null);
+    try {
+      const response = await fetch("/api/looks/manual/saved", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) {
+        setError(payload.error || "Failed to delete saved look.");
+        return;
+      }
+
+      toast.success("Saved look deleted.");
+      await loadSavedManualLooks();
+    } catch {
+      setError("Unexpected network error while deleting saved look.");
+    } finally {
+      setIsLoading(false);
+      setLoadingMode(null);
+    }
+  };
+
+  const handleLoadSavedLookToSelection = (savedLook: ManualSavedLook) => {
+    const nextIds = savedLook.garmentIds.slice(0, MAX_SELECTION_GARMENTS);
+    setSelectionIds(nextIds);
+    setSelectionIdsState(nextIds);
+    setManualTryOnImageUrl(savedLook.generatedImageUrl);
+    setManualTryOnContext({
+      locationLabel: savedLook.locationLabel,
+      weatherSummary: savedLook.weatherSummary,
+      weatherSource: savedLook.weatherSource,
+    });
+    setManualLookTitle(savedLook.title);
+    void refreshSelectionFromStorage();
+    toast.success("Loaded saved look into Selection.");
+  };
+
   const handleClearSingle = () => {
     setPrompt("");
     setSelectedTools([]);
@@ -674,12 +943,12 @@ export default function AiLookClient() {
     <div className="min-h-[calc(100vh-4rem)] min-h-[calc(100dvh-4rem)] bg-slate-100 p-4 md:p-6">
       <div className="mx-auto w-full max-w-6xl space-y-6">
         <div className="border-b border-slate-300">
-          <div role="tablist" aria-label="AI look modes" className="flex items-end gap-6">
+          <div role="tablist" aria-label="Looks modes" className="flex items-end gap-6">
             <button
               type="button"
               role="tab"
               aria-selected={activeMode === "single"}
-              aria-controls="ai-look-main-panel"
+              aria-controls="looks-main-panel"
               className={cn(
                 "-mb-px border-b-2 border-transparent px-1 py-2 text-sm font-medium transition",
                 activeMode === "single"
@@ -691,13 +960,13 @@ export default function AiLookClient() {
                 setError(null);
               }}
             >
-              AI Look
+              Expert
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={activeMode === "travel"}
-              aria-controls="ai-look-main-panel"
+              aria-controls="looks-main-panel"
               className={cn(
                 "-mb-px border-b-2 border-transparent px-1 py-2 text-sm font-medium transition",
                 activeMode === "travel"
@@ -711,11 +980,29 @@ export default function AiLookClient() {
             >
               Pack for Travel
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeMode === "selection"}
+              aria-controls="looks-main-panel"
+              className={cn(
+                "-mb-px border-b-2 border-transparent px-1 py-2 text-sm font-medium transition",
+                activeMode === "selection"
+                  ? "border-slate-900 text-slate-900"
+                  : "text-slate-600 hover:text-slate-900"
+              )}
+              onClick={() => {
+                setActiveMode("selection");
+                setError(null);
+              }}
+            >
+              Selection
+            </button>
           </div>
         </div>
 
         <Card>
-          <CardContent id="ai-look-main-panel" role="tabpanel" className="space-y-4">
+          <CardContent id="looks-main-panel" role="tabpanel" className="space-y-4">
 
             {activeMode === "single" ? (
               <form onSubmit={handleGenerateSingle} className="space-y-3">
@@ -819,7 +1106,7 @@ export default function AiLookClient() {
                 </div>
                 {error && <p className="text-sm text-red-600">{error}</p>}
               </form>
-            ) : (
+            ) : activeMode === "travel" ? (
               <form onSubmit={handleGenerateTravel} className="space-y-4">
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="space-y-2">
@@ -862,6 +1149,176 @@ export default function AiLookClient() {
                   {(error || travelDateError) && <p className="text-sm text-red-600">{error || travelDateError}</p>}
                 </div>
               </form>
+            ) : (
+              <div className="space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Manual Selection</h3>
+                    <p className="text-sm text-slate-700">
+                      Add garments from garment actions (`Add To Look`) to build your own look.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleClearSelection}
+                      disabled={isSelectionLoading || selectionIds.length === 0}
+                    >
+                      Clear Selection
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => void handleTryOnSelection()}
+                      disabled={isSelectionLoading || selectionIds.length < 2 || selectionIds.length > MAX_SELECTION_GARMENTS}
+                    >
+                      {isSelectionLoading ? "Generating..." : "Try it"}
+                    </Button>
+                  </div>
+                </div>
+
+                {selectionLoadError && <p className="text-sm text-red-600">{selectionLoadError}</p>}
+                {error && <p className="text-sm text-red-600">{error}</p>}
+
+                {selectionGarments.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-600">
+                    No garments selected yet. Open a garment, press `Cmd/Ctrl+K`, and use <span className="font-medium">Add To Look</span>.
+                  </div>
+                ) : (
+                  <div>
+                    <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                      The Lineup ({selectionGarments.length}/{MAX_SELECTION_GARMENTS})
+                    </h3>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {selectionGarments.map((garment) => (
+                        <div
+                          key={garment.id}
+                          className="rounded-lg border bg-white p-3"
+                        >
+                          <div className="flex items-center gap-3">
+                            <Link href={`/garments/${garment.id}`} className="relative h-20 w-20 overflow-hidden rounded-md bg-slate-100">
+                              <Image
+                                src={garment.file_name || "/placeholder.png"}
+                                alt={`${garment.brand} ${garment.model}`}
+                                fill
+                                sizes="80px"
+                                className="object-cover"
+                              />
+                            </Link>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-semibold text-slate-900">{garment.model}</p>
+                              <p className="truncate text-sm text-slate-700">{garment.brand}</p>
+                              <p className="truncate text-xs uppercase tracking-wide text-slate-500">{garment.type}</p>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleRemoveFromSelection(garment.id)}
+                              disabled={isSelectionLoading}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {manualTryOnImageUrl && (
+                  <div className="space-y-3 rounded-lg border bg-white p-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Try-on Result</h3>
+                    <div className="relative h-[420px] w-full overflow-hidden rounded-md bg-slate-100">
+                      <Image
+                        src={manualTryOnImageUrl}
+                        alt="Generated manual look try-on"
+                        fill
+                        sizes="(max-width: 768px) 100vw, 700px"
+                        className="object-contain"
+                      />
+                    </div>
+                    {manualTryOnContext && (
+                      <p className="text-sm text-slate-700">
+                        Scene context: {manualTryOnContext.locationLabel} | {manualTryOnContext.weatherSummary} (
+                        {manualTryOnContext.weatherSource === "live" ? "live weather" : "fallback weather"})
+                      </p>
+                    )}
+                    <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                      <Input
+                        value={manualLookTitle}
+                        onChange={(event) => setManualLookTitle(event.target.value)}
+                        placeholder="Manual Look title"
+                        disabled={isSelectionLoading}
+                      />
+                      <Button
+                        type="button"
+                        onClick={() => void handleSaveManualLook()}
+                        disabled={isSelectionLoading || selectionIds.length < 2}
+                      >
+                        {isSelectionLoading ? "Saving..." : "Save Look"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-3 rounded-lg border bg-white p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Saved Looks</h3>
+                    {savedLooksLoading && <span className="text-xs text-slate-500">Loading...</span>}
+                  </div>
+                  {savedLooksError && <p className="text-sm text-red-600">{savedLooksError}</p>}
+                  {!savedLooksLoading && savedManualLooks.length === 0 ? (
+                    <p className="text-sm text-slate-600">No saved manual looks yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {savedManualLooks.map((savedLook) => (
+                        <div key={savedLook.id} className="rounded-lg border border-slate-200 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex min-w-0 items-center gap-3">
+                              <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-md bg-slate-100">
+                                <Image
+                                  src={savedLook.generatedImageUrl}
+                                  alt={savedLook.title}
+                                  fill
+                                  sizes="56px"
+                                  className="object-cover"
+                                />
+                              </div>
+                              <div className="min-w-0">
+                              <p className="text-sm font-semibold text-slate-900">{savedLook.title}</p>
+                              <p className="text-xs text-slate-600">
+                                {new Date(savedLook.createdAt).toLocaleString()} | {savedLook.locationLabel}
+                              </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleLoadSavedLookToSelection(savedLook)}
+                                disabled={isSelectionLoading}
+                              >
+                                Load
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => void handleDeleteSavedLook(savedLook.id)}
+                                disabled={isSelectionLoading}
+                              >
+                                Delete
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </CardContent>
         </Card>

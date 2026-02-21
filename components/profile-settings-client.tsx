@@ -380,7 +380,7 @@ export default function ProfileSettingsClient({
           <CardHeader>
             <CardTitle>User Profile</CardTitle>
             <CardDescription>
-              Manage profile defaults used by AI Look.
+              Manage profile defaults used by Looks.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-6 md:grid-cols-[190px_minmax(0,1fr)]">
@@ -419,7 +419,7 @@ export default function ProfileSettingsClient({
                 <div className="space-y-2">
                   <Label htmlFor="default-location">Default Location</Label>
                   <p className="text-xs text-muted-foreground">
-                    Used for AI Look weather when your prompt does not include a location.
+                    Used for Looks weather when your prompt does not include a location.
                   </p>
                   <Input
                     id="default-location"

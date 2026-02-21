@@ -31,8 +31,8 @@ const links = [
     description: "View analytics",
   },
   {
-    href: "/ai-look",
-    label: "AI Look",
+    href: "/looks",
+    label: "Looks",
     icon: Sparkles,
     description: "Get one full outfit",
   },

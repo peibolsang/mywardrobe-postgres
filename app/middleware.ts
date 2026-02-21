@@ -15,10 +15,10 @@ export default auth((req) => {
     }
   }
 
-  // Guard owner-only editor, AI look, and profile subtrees
+  // Guard owner-only editor, Looks, and profile subtrees
   if (
     nextUrl.pathname.startsWith("/editor") ||
-    nextUrl.pathname.startsWith("/ai-look") ||
+    nextUrl.pathname.startsWith("/looks") ||
     nextUrl.pathname.startsWith("/profile")
   ) {
     if (!email) {
@@ -35,5 +35,5 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/editor/:path*", "/ai-look/:path*", "/profile/:path*", "/garments/:path*"],
+  matcher: ["/editor/:path*", "/looks/:path*", "/profile/:path*", "/garments/:path*"],
 };

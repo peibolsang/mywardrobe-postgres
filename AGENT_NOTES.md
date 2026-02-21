@@ -214,3 +214,14 @@
 ## 2026-02-16
 - Debug prep note: Mapped single-look flow end-to-end before debugging (`components/ai-look-client.tsx` -> `POST /api/ai-look` Step-1/Step-2 -> deterministic normalization/rerank/history/feedback -> response contract), with emphasis on temporal weather fallback, Add Tool directive merge precedence, anchor handling, and rerank penalties.
 - Single-mode constraints note: Added category-aware place relaxation envelope for Home/WFH contexts so `outerwear`/`footwear` hard checks accept urban/transit-compatible places while `top`/`bottom` remain strict to interpreted place, preserving fixed 4-piece silhouette and reducing false 422 preflight failures.
+
+## 2026-02-21
+- Context: User asked for a fast codebase onboarding pass ("get up to speed with this codebase").
+- What went right: Mapped the repository by runtime boundaries first (`app` routes, `actions`, `lib`, key APIs) before drilling into the large `app/api/ai-look/route.ts` file.
+- What went wrong: Repeated the zsh glob pitfall on route-group paths (`app/(main)/*`) and dynamic segments (`[id]`) when using unquoted paths.
+- Correction applied: Quoted route-group and dynamic paths consistently (for example `'app/(main)/viewer/page.tsx'`, `'app/(main)/garments/[id]/page.tsx'`) when reading files.
+- Architecture reminder: `/api/ai-look` enforces same-origin + owner auth + owner-scoped persistent DB rate limiting (with in-memory fallback) before any model/tool work; keep this ordering for future edits.
+- Data-flow reminder: Editor/add-garment pages preload wardrobe/schema/editor options server-side and then `EditorForm` reconciles with `/api/wardrobe?fresh=1` to avoid stale client navigation state.
+- Route-rename note: Renamed Looks surface from `/ai-look` + `/api/ai-look` to `/looks` + `/api/looks` (including feedback endpoint, middleware owner-gate matcher, navigation link, garment deep-link anchor routing, tab label, and AGENTS route docs) to keep route naming aligned with product wording.
+- Manual looks implementation note: Added Selection mode under `/looks` with garment-level CMDK action `Add To Look` (browser-local 2-8 garment list), owner-only try-on generation endpoint (`POST /api/looks/manual/try-on`), owner-only saved looks endpoints (`GET/POST/DELETE /api/looks/manual/saved`), and DB migration `scripts/sql/create-manual-looks.sql` for `manual_look_saved`.
+- Reliability note: For new strict TS server routes, when mapping selected IDs from `Map#get`, use explicit type predicates in `.filter` to avoid `possibly undefined` regressions.

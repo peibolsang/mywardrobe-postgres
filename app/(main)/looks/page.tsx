@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
 
 export const metadata = {
-  title: "My Wardrobe - AI Look",
+  title: "My Wardrobe - Looks",
 };
 
 export default async function AiLookPage() {
