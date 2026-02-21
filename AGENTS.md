@@ -60,11 +60,11 @@ Use imperative commit subjects.
 5. View distribution analytics in `/stats`.
 6. Configure profile settings in `/profile` (owner-only), including `Default Location`, uploaded full-body photo (for try-on identity), favorite style selections, and saved menswear references used by AI Look tooling/directive flows.
 7. Generate AI recommendations via `/looks` (owner-only): either a single free-text look or a multi-day "Pack for Travel" plan (destination + date range + reason).
-   - From garment details (owner view), `Cmd/Ctrl+K` opens garment actions including `Generate look around this garment`, which routes to `/looks?anchorGarmentId=<id>&anchorMode=strict`.
+   - From garment details (owner view), `Cmd/Ctrl+K` opens garment actions including `New Look Idea Around This Garment`, which routes to `/looks?anchorGarmentId=<id>&anchorMode=strict`.
    - From garment details (owner view), `Cmd/Ctrl+K` also includes `Add To Changing Room`, which stores the garment in browser-local Selection.
-   - `/looks` includes four tabs: `Favorite Looks` (default), `Create New Look`, `Pack for Travel`, and `Changing Room` (manual look curation: 2-8 garments + `Try on me` + save look).
+   - `/looks` includes four tabs: `Favorite Looks` (default), `New Look Idea`, `Pack for Travel`, and `Changing Room` (manual look curation: 2-8 garments + `Try on me` + save look).
    - Favorite look detail is deep-linkable at `/looks/[id]`. Clicking a look title routes to that URL; `Back to Favorite Looks` returns to `/looks`.
-   - `Create New Look` results also expose `Try on me`, which uses the same manual try-on pipeline.
+   - `New Look Idea` results also expose `Try on me`, which uses the same manual try-on pipeline.
 8. Navigation intentionally does not expose `/editor` as a primary tab; edit is context-driven from garment details.
 
 ## Rendering strategy
@@ -73,7 +73,7 @@ Use imperative commit subjects.
 3. Server actions (`actions/garment.ts`) own write operations, authorization checks, redirects, and cache invalidation.
 4. Editor pages (`/editor`, `/add-garment`) preload wardrobe/schema/editor-options server-side and render `EditorForm` inside `Suspense` with a layout-matching skeleton fallback to avoid empty-state flash and layout shift.
 5. Profile page (`/profile`) is route-guarded server-side (owner-only), hydrates owner defaults + body photo + style preferences + saved references, and persists via `/api/profile`, `/api/profile/body-photo`, `/api/profile/styles`, and `/api/profile/references`.
-6. AI look page (`/looks`) is route-guarded server-side and renders a client UI with four tabs: (a) `Favorite Looks` (default), (b) free-text single-look generation (`Create New Look`), (c) "Pack for Travel" planning, and (d) `Changing Room` manual look mode.
+6. AI look page (`/looks`) is route-guarded server-side and renders a client UI with four tabs: (a) `Favorite Looks` (default), (b) free-text single-look generation (`New Look Idea`), (c) "Pack for Travel" planning, and (d) `Changing Room` manual look mode.
    - Single-look prompt includes an `Add Tool` control that lets the user attach explicit `Style` and `Reference` selections as removable chips per request.
 7. `/api/looks` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
    - Manual Selection APIs are separate owner-only endpoints: `/api/looks/manual/try-on` and `/api/looks/manual/saved`.

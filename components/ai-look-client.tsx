@@ -453,6 +453,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
   const [savedLookActionsDebouncedSearchValue, setSavedLookActionsDebouncedSearchValue] = useState("");
   const [savedLookActionsView, setSavedLookActionsView] = useState<"search" | "export-json">("search");
   const [isSavedLookJsonCopied, setIsSavedLookJsonCopied] = useState(false);
+  const [isAddLookChoiceOpen, setIsAddLookChoiceOpen] = useState(false);
   const [expandedTryOnImageUrl, setExpandedTryOnImageUrl] = useState<string | null>(null);
   const [expandedTryOnImageAlt, setExpandedTryOnImageAlt] = useState("Try-on image");
 
@@ -1432,6 +1433,16 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     setTravelFeedbackStatuses({});
   };
 
+  const handleAddNewLookEntry = () => {
+    const latestSelectionIds = getSelectionIds();
+    setSelectionIdsState(latestSelectionIds);
+    if (latestSelectionIds.length === 0) {
+      setActiveMode("single");
+      return;
+    }
+    setIsAddLookChoiceOpen(true);
+  };
+
   const handleOpenSavedLookJson = () => {
     setSavedLookActionsView("export-json");
     setSavedLookActionsSearchValue("");
@@ -1634,6 +1645,36 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
         )}
       </CommandDialog>
 
+      <Dialog open={isAddLookChoiceOpen} onOpenChange={setIsAddLookChoiceOpen}>
+        <DialogContent className="max-w-md">
+          <DialogTitle>Start a New Look</DialogTitle>
+          <DialogDescription>
+            Your Changing Room already has selected garments. Choose how you want to continue.
+          </DialogDescription>
+          <div className="mt-2 grid gap-2">
+            <Button
+              type="button"
+              onClick={() => {
+                setActiveMode("single");
+                setIsAddLookChoiceOpen(false);
+              }}
+            >
+              New Look Idea
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setActiveMode("selection");
+                setIsAddLookChoiceOpen(false);
+              }}
+            >
+              Open Changing Room
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <div className="mx-auto w-full max-w-6xl space-y-6">
         {!isStandaloneSavedLookPage ? (
           <div className="border-b border-slate-300">
@@ -1672,7 +1713,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                 setError(null);
               }}
             >
-              Create New Look
+              New Look Idea
             </button>
             <button
               type="button"
@@ -1975,7 +2016,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                     ) : (
                       <button
                         type="button"
-                        onClick={() => setActiveMode("single")}
+                        onClick={handleAddNewLookEntry}
                         className="group flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-6 py-8 text-center transition hover:border-slate-400 hover:bg-slate-50"
                         aria-label="Add new look"
                       >

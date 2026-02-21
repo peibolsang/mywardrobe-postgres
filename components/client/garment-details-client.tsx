@@ -392,14 +392,14 @@ export default function GarmentDetailsClient({
                 <CommandGroup heading="Actions">
                   {showGenerateLookAction && (
                   <CommandItem
-                    value="Generate Look Around This Garment"
+                    value="New Look Idea Around This Garment"
                     keywords={["generate", "look", "around", "garment", "anchor", "ai"]}
                     onSelect={handleGenerateAnchoredLook}
                   >
                     <div className="flex w-full items-center justify-between gap-3">
                       <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
                         <Sparkles className="size-4 shrink-0 text-gray-500" />
-                        <span className="truncate">Generate Look Around This Garment</span>
+                        <span className="truncate">New Look Idea Around This Garment</span>
                       </span>
                       <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
                         G

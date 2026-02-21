@@ -248,3 +248,5 @@
 - State-isolation note: `Saved Looks > Load` now hydrates dedicated saved-preview state only (does not mutate Selection/local-storage state), preserving Selection as generation-only workflow.
 - Saved-looks navigation note: Implemented master-detail flow in `Saved Looks` (`list` table view -> `detail` preview view with Back button), so loading a look hides the table and focuses on lineup + try-on result.
 - Try-on parity note: `Create New Look` (`single`) now reuses the same shared 3-card try-on renderer as `Selection`/`Saved Looks`, with dedicated single-preview state for details aggregation and save actions.
+- Naming consistency note: Renamed Looks tab/action label from `Create New Look` to `New Look Idea` in UI and architecture docs to align product terminology.
+- Naming consistency note: Renamed garment CMDK action label from `Generate Look Around This Garment` to `New Look Idea Around This Garment` to align with `/looks` naming.
