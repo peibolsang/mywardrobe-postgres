@@ -176,3 +176,51 @@ export const deleteManualLookById = async ({
 
   return rows.length > 0;
 };
+
+export const updateManualLookById = async ({
+  ownerKey,
+  id,
+  title,
+  garmentIds,
+  generatedImageUrl,
+  locationLabel,
+  weatherSummary,
+  weatherSource,
+}: {
+  ownerKey: string;
+  id: number;
+  title: string;
+  garmentIds: number[];
+  generatedImageUrl: string;
+  locationLabel: string;
+  weatherSummary: string;
+  weatherSource: "live" | "fallback";
+}): Promise<ManualLookSaved | null> => {
+  const rows = (await sql`
+    UPDATE manual_look_saved
+    SET
+      title = ${title},
+      garment_ids_json = ${JSON.stringify(garmentIds)},
+      generated_image_url = ${generatedImageUrl},
+      location_label = ${locationLabel},
+      weather_summary = ${weatherSummary},
+      weather_source = ${weatherSource},
+      updated_at = NOW()
+    WHERE owner_key = ${ownerKey}
+      AND id = ${id}
+    RETURNING
+      id,
+      owner_key,
+      title,
+      garment_ids_json,
+      generated_image_url,
+      location_label,
+      weather_summary,
+      weather_source,
+      created_at,
+      updated_at;
+  `) as ManualLookSavedRow[];
+
+  const row = rows[0];
+  return row ? mapRow(row) : null;
+};

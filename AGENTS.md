@@ -76,7 +76,7 @@ Use imperative commit subjects.
 6. AI look page (`/looks`) is route-guarded server-side and renders a client UI with four tabs: (a) `Favorite Looks` (default), (b) free-text single-look generation (`New Look Idea`), (c) "Pack for Travel" planning, and (d) `Changing Room` manual look mode.
    - Single-look prompt includes an `Add Tool` control that lets the user attach explicit `Style` and `Reference` selections as removable chips per request.
 7. `/api/looks` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
-   - Manual Selection APIs are separate owner-only endpoints: `/api/looks/manual/try-on` and `/api/looks/manual/saved`.
+   - Manual Selection APIs are separate owner-only endpoints: `/api/looks/manual/try-on` and `/api/looks/manual/saved` (`GET`/`POST`/`PATCH`/`DELETE`).
    - `/api/looks/manual/try-on` requires `user_profile.body_photo_url`; if missing, it returns 422 with `errorCode: PROFILE_BODY_PHOTO_REQUIRED`.
 8. Single-look mode uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) multi-candidate look generation constrained to wardrobe IDs, followed by server-side validation, normalization, reranking, and one final look selection.
    - Step 1 is context-first (`weather`, `occasion`, `place`, `timeOfDay`, `notes`); server deterministically derives `formality`, `style`, and material targets from context + structured weather profile before Step 2.
@@ -132,7 +132,7 @@ Use imperative commit subjects.
   - `app/middleware.ts` applies auth gate on `/garments/*` (session required) and owner gate on `/editor/*` + `/looks/*` + `/profile/*` for defense-in-depth.
 - API-level protection:
   - `/api/wardrobe`, `/api/editor-options`, `/api/upload`, and `/api/looks` require authenticated owner session (`403` on failure).
-  - `/api/looks/manual/try-on` and `/api/looks/manual/saved` require authenticated owner session (`403` on failure).
+  - `/api/looks/manual/try-on` and `/api/looks/manual/saved` (`GET`/`POST`/`PATCH`/`DELETE`) require authenticated owner session (`403` on failure).
   - `/api/profile`, `/api/profile/body-photo`, `/api/profile/styles`, `/api/profile/references` (`GET`/`POST`/`DELETE`), and `/api/profile/references/catalog` require authenticated owner session (`403` on failure).
   - `/api/looks/feedback` also requires authenticated owner session (`403` on failure).
 - Mutation-level protection:

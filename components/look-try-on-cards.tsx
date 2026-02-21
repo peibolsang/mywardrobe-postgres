@@ -16,9 +16,14 @@ interface LookTryOnCardsProps {
   details: LookDetailsSummary;
   lookTitle: string;
   onLookTitleChange: (value: string) => void;
+  lookTitleReadOnly?: boolean;
   onSave: () => void;
   saveDisabled: boolean;
   saveLabel: string;
+  showSaveAction?: boolean;
+  onEditAction?: () => void;
+  editActionDisabled?: boolean;
+  editActionLabel?: string;
   onSecondaryAction?: () => void;
   secondaryActionDisabled?: boolean;
   secondaryActionLabel?: string;
@@ -95,9 +100,14 @@ export default function LookTryOnCards({
   details,
   lookTitle,
   onLookTitleChange,
+  lookTitleReadOnly = false,
   onSave,
   saveDisabled,
   saveLabel,
+  showSaveAction = true,
+  onEditAction,
+  editActionDisabled = false,
+  editActionLabel = "Edit Look",
   onSecondaryAction,
   secondaryActionDisabled = false,
   secondaryActionLabel,
@@ -134,20 +144,30 @@ export default function LookTryOnCards({
             value={lookTitle}
             onChange={(event) => onLookTitleChange(event.target.value)}
             placeholder="Manual Look title"
+            readOnly={lookTitleReadOnly}
+            disabled={lookTitleReadOnly}
           />
         </div>
-        <Button type="button" className="w-full" onClick={onSave} disabled={saveDisabled}>
-          {saveLabel}
-        </Button>
-        {onSecondaryAction && secondaryActionLabel ? (
-          <Button
-            type="button"
-            variant="outline"
-            className={secondaryActionClassName}
-            onClick={onSecondaryAction}
-            disabled={secondaryActionDisabled}
-          >
-            {secondaryActionLabel}
+        {showSaveAction ? (
+          <>
+            <Button type="button" className="w-full" onClick={onSave} disabled={saveDisabled}>
+              {saveLabel}
+            </Button>
+            {onSecondaryAction && secondaryActionLabel ? (
+              <Button
+                type="button"
+                variant="outline"
+                className={secondaryActionClassName}
+                onClick={onSecondaryAction}
+                disabled={secondaryActionDisabled}
+              >
+                {secondaryActionLabel}
+              </Button>
+            ) : null}
+          </>
+        ) : onEditAction ? (
+          <Button type="button" className="w-full" onClick={onEditAction} disabled={editActionDisabled}>
+            {editActionLabel}
           </Button>
         ) : null}
       </div>

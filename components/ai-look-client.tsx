@@ -447,6 +447,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
   const [savedPreviewImageUrl, setSavedPreviewImageUrl] = useState<string | null>(null);
   const [savedPreviewContext, setSavedPreviewContext] = useState<ManualTryOnContext | null>(null);
   const [savedPreviewTitle, setSavedPreviewTitle] = useState("");
+  const [isSavedPreviewEditing, setIsSavedPreviewEditing] = useState(false);
   const [savedPreviewLoadError, setSavedPreviewLoadError] = useState<string | null>(null);
   const [isSavedLookActionsOpen, setIsSavedLookActionsOpen] = useState(false);
   const [savedLookActionsSearchValue, setSavedLookActionsSearchValue] = useState("");
@@ -1286,6 +1287,10 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
       setError("Load a saved look preview before saving.");
       return;
     }
+    if (savedPreviewLookId == null) {
+      setError("Look ID is missing. Reload this look and try again.");
+      return;
+    }
     const garmentIds = savedPreviewGarments.map((garment) => garment.id);
     if (garmentIds.length < 2 || garmentIds.length > MAX_SELECTION_GARMENTS) {
       setError(`Saved preview must include 2 to ${MAX_SELECTION_GARMENTS} garments before saving.`);
@@ -1299,9 +1304,10 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
 
     try {
       const response = await fetch("/api/looks/manual/saved", {
-        method: "POST",
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: savedPreviewLookId,
           title,
           garmentIds,
           generatedImageUrl: savedPreviewImageUrl,
@@ -1314,7 +1320,8 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
         return;
       }
 
-      toast.success("Saved look updated as a new entry.");
+      toast.success("Changes were applied to this look.");
+      setIsSavedPreviewEditing(false);
       await loadSavedManualLooks();
     } catch {
       setError("Unexpected network error while saving loaded look.");
@@ -1343,6 +1350,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
       toast.success("Saved look deleted.");
       if (savedPreviewLookId === id) {
         setSavedPreviewLookId(null);
+        setIsSavedPreviewEditing(false);
         setSavedPreviewGarments([]);
         setSavedPreviewImageUrl(null);
         setSavedPreviewContext(null);
@@ -1374,6 +1382,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     setSavedPreviewLoadError(null);
     setSavedPreviewGarments([]);
     setSavedPreviewLookId(savedLook.id);
+    setIsSavedPreviewEditing(false);
     setSavedPreviewImageUrl(savedLook.generatedImageUrl);
     setSavedPreviewContext({
       locationLabel: savedLook.locationLabel,
@@ -2184,6 +2193,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                               details={savedPreviewLookDetails}
                               lookTitle={savedPreviewTitle}
                               onLookTitleChange={setSavedPreviewTitle}
+                              lookTitleReadOnly={!isSavedPreviewEditing}
                               onSave={() => void handleSaveSavedPreviewLook()}
                               saveDisabled={
                                 savedTabBusy ||
@@ -2192,8 +2202,12 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                                 savedPreviewGarments.length < 2
                               }
                               saveLabel={isSelectionLoading ? "Saving..." : "Save Look"}
+                              showSaveAction={isSavedPreviewEditing}
+                              onEditAction={() => setIsSavedPreviewEditing(true)}
+                              editActionDisabled={savedTabBusy}
+                              editActionLabel="Edit Look"
                               onSecondaryAction={
-                                savedPreviewLookId != null
+                                isSavedPreviewEditing && savedPreviewLookId != null
                                   ? () => void handleDeleteSavedLook(savedPreviewLookId)
                                   : undefined
                               }
