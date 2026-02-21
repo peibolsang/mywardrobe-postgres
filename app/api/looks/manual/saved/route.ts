@@ -24,7 +24,23 @@ const deleteManualLookSchema = z.object({
   id: z.number().int().positive(),
 }).strict();
 
+const TRUSTED_BLOB_HOST_SUFFIX = ".public.blob.vercel-storage.com";
+
 const dedupeIds = (ids: number[]): number[] => Array.from(new Set(ids));
+
+const isTrustedGeneratedImageUrl = (value: string): boolean => {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:") return false;
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      hostname.endsWith(TRUSTED_BLOB_HOST_SUFFIX) &&
+      hostname.length > TRUSTED_BLOB_HOST_SUFFIX.length
+    );
+  } catch {
+    return false;
+  }
+};
 
 export async function GET() {
   try {
@@ -61,6 +77,12 @@ export async function POST(request: Request) {
     const garmentIds = dedupeIds(parsed.data.garmentIds);
     if (garmentIds.length < 2 || garmentIds.length > 8) {
       return NextResponse.json({ error: "Manual look must include between 2 and 8 unique garments." }, { status: 400 });
+    }
+    if (!isTrustedGeneratedImageUrl(parsed.data.generatedImageUrl)) {
+      return NextResponse.json(
+        { error: "generatedImageUrl must be an HTTPS Vercel Blob URL from this workspace." },
+        { status: 400 }
+      );
     }
 
     const savedLook = await insertManualLook({

@@ -1,8 +1,13 @@
 import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
 import { NextResponse } from 'next/server';
 import { isOwnerSession } from '@/lib/owner';
+import { isAllowedOrigin } from '@/lib/request-origin';
  
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!isAllowedOrigin(request)) {
+    return NextResponse.json({ error: 'Invalid request origin.' }, { status: 403 });
+  }
+
   if (!(await isOwnerSession())) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }

@@ -43,6 +43,8 @@ Use imperative commit subjects.
 ## Security & Configuration Tips
 - Keep secrets in `.env.development.local`; never commit credentials.
 - Required env vars used in code include: `DATABASE_URL`, `EDITOR_OWNER_EMAIL`, `AUTH_SECRET`, and `AUTH_RESEND_KEY`.
+- Never expose server-only secrets (for example `DATABASE_URL`) through `next.config.ts` `env`; read them only from server runtime (`process.env`) in server-only modules/routes/actions.
+- User-provided persisted image URLs (for example saved manual looks) must be validated against trusted storage hosts (Vercel Blob) before persistence/rendering.
 - Owner-only capabilities are enforced server-side. Use `lib/owner.ts` (`isOwnerSession`) for any new editor/admin route, API endpoint, or mutation.
 
 # 2.Application Architecture
@@ -143,6 +145,7 @@ Use imperative commit subjects.
 - `AUTH_EMAIL_FROM` can be used to configure sender address; fallback is `onboarding@resend.dev`.
 - AI recommendation API hardening (`/api/looks`) includes same-origin POST validation and owner-scoped persistent DB-backed rate limiting (minute + hour windows) with in-memory fallback only if the DB limiter is unavailable, to reduce abuse risk and OpenAI cost exposure.
 - Profile mutation API hardening includes same-origin validation on `POST`/`DELETE` for `/api/profile`, `/api/profile/body-photo`, `/api/profile/styles`, and `/api/profile/references`.
+- Upload token issuance hardening includes same-origin validation on `POST /api/upload` in addition to owner-session enforcement.
 
 ## Caching strategy: 
 - Shared wardrobe reads are centralized in `lib/wardrobe.ts` via `getWardrobeData()`.

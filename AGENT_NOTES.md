@@ -138,6 +138,14 @@
 - Prompt curation note: Added Albert Muzquiz as a fourth expert persona in `app/api/ai-look/prompt.md` to expand panel-style guidance while preserving existing system prompt structure.
 - Material-intent rule note: Added deterministic material-composition scoring tied to weather/place/occasion/time across single and travel flows (selection, normalization, and confidence scoring), and reinforced it in prompt instructions so final recommendations account for material fit beyond tag overlap.
 - Intent-architecture note: Refactored Step 1 intent interpretation to context-only (`weather`, `occasion`, `place`, `timeOfDay`, `notes`) and moved `formality`/`style` into deterministic server-side derivation from those context dimensions (single + travel), ensuring consistent context → styling causality.
+
+## 2026-02-21
+- Review discipline note: During security-first review, always inspect `next.config.*` early; exposing server secrets via `nextConfig.env` is easy to miss and high impact.
+- Regression review note: For async client "load preview" flows, guard against stale request races (request token/abort) to prevent mismatched image/title vs lineup state when users click quickly.
+- API hardening note: For same-origin protection, avoid treating missing `Origin` as universally allowed unless there is an explicit trusted server-to-server use case.
+- Security fix note: Removed `DATABASE_URL` from `next.config.ts` public `env` injection and tightened `images.remotePatterns` from wildcard hosts to Vercel Blob host pattern only.
+- Input hardening note: `/api/looks/manual/saved` now rejects non-HTTPS/non-Vercel-Blob `generatedImageUrl` values before persistence, reducing server-side remote image fetch abuse risk.
+- CSRF parity note: Added same-origin validation to `POST /api/upload` so upload token issuance matches other owner-only mutation endpoints.
 - Rules v2 implementation note: Added deterministic structured weather profiles across single/travel (`tempBand`, precipitation, wind, humidity, wet-surface risk, confidence) and threaded them into scoring, normalization, and observability logs.
 - Rules v2 priority note: Enforced category-aware hard constraints with explicit priority (`weather` first, then `occasion/place`, then `time`, then `style/formality`) and added wet-material hard conflict blocking for outerwear/footwear in high wet-risk conditions.
 - Feedback loop note: Implemented owner-only `POST /api/ai-look/feedback` plus manual Neon SQL migration `scripts/sql/create-ai-look-feedback.sql`; `/ai-look` UI now captures thumbs up/down feedback with optional downvote reason for both single and travel day cards.
