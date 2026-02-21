@@ -170,8 +170,8 @@ export default async function WardrobeViewerPage({
     console.error('Error fetching data in WardrobeViewerPage:', e);
   }
 
-  if (error) return <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4 relative text-red-500">Error: {error}</div>;
-  if (wardrobeData.length === 0) return <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4 relative">No wardrobe items found.</div>;
+  if (error) return <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-4 relative text-red-500">Error: {error}</div>;
+  if (wardrobeData.length === 0) return <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-4 relative">No wardrobe items found.</div>;
 
   return (
     <div className="relative">

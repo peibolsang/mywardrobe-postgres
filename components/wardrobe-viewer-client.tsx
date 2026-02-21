@@ -8,7 +8,7 @@ import Image from 'next/image';
 import { Command as CommandPrimitive } from 'cmdk';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
-import { FiFilter, FiHeart, FiPlus, FiSearch } from 'react-icons/fi';
+import { FiFilter, FiHeart, FiSearch } from 'react-icons/fi';
 import { ArrowLeft, CloudSun, Code2, Copy, Flower2, Leaf, Search, Snowflake, Sun } from 'lucide-react';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
 import {
@@ -231,13 +231,14 @@ const colorMap: { [key: string]: string } = {
 };
 
 const AddNewGarmentCard = () => (
-  <Link href="/add-garment" passHref>
-    <Card className="flex flex-col items-center justify-center text-center relative bg-gray-200 hover:bg-gray-300 transition-colors duration-200 cursor-pointer h-full">
-      <CardContent className="flex flex-col items-center justify-center text-center">
-        <FiPlus className="text-6xl text-gray-500" />
-        <p className="mt-2 text-sm text-gray-600">Add New Garment</p>
-      </CardContent>
-    </Card>
+  <Link
+    href="/add-garment"
+    className="group flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-6 py-8 text-center transition hover:border-slate-400 hover:bg-slate-50"
+  >
+    <span className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full border border-slate-300 bg-white text-2xl leading-none text-slate-700 transition group-hover:border-slate-500 group-hover:text-slate-900">
+      +
+    </span>
+    <p className="text-sm font-semibold text-slate-900">Add New Garment</p>
   </Link>
 );
 
@@ -565,7 +566,7 @@ export default function WardrobeViewerClient({
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 flex">
+    <div className="min-h-screen bg-slate-100 flex">
       <CommandDialog
         open={isSearchOpen}
         onOpenChange={(open) => {
@@ -802,14 +803,14 @@ export default function WardrobeViewerClient({
               )}
               <CardContent className="flex flex-col items-center text-center">
                 <div className="flex flex-col items-center justify-start p-4">
-                  <Link href={`/garments/${garment.id}`} scroll={false}>
+                  <Link href={`/garments/${garment.id}`} scroll={false} className="block cursor-zoom-in">
                     <Image
                       key={garment.file_name}
                       src={garment.file_name}
                       alt={garment.model}
                       width={400}
                       height={400}
-                      className="cursor-pointer object-contain"
+                      className="cursor-zoom-in object-contain"
                     />
                   </Link>
                 </div>

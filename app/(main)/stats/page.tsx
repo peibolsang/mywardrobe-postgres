@@ -51,11 +51,11 @@ export default async function StatsPage() {
   }
 
   if (error) {
-    return <div className="flex justify-center items-center min-h-screen text-red-500">Error: {error}</div>;
+    return <div className="flex justify-center items-center min-h-screen bg-slate-100 text-red-500">Error: {error}</div>;
   }
 
   if (wardrobeData.length === 0) {
-    return <div className="flex justify-center items-center min-h-screen">No wardrobe data found.</div>;
+    return <div className="flex justify-center items-center min-h-screen bg-slate-100">No wardrobe data found.</div>;
   }
 
   const totalGarments = wardrobeData.length;

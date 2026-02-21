@@ -19,6 +19,10 @@ interface LookTryOnCardsProps {
   onSave: () => void;
   saveDisabled: boolean;
   saveLabel: string;
+  onSecondaryAction?: () => void;
+  secondaryActionDisabled?: boolean;
+  secondaryActionLabel?: string;
+  secondaryActionClassName?: string;
   onOpenImage: (imageUrl: string, imageAlt: string) => void;
 }
 
@@ -94,6 +98,10 @@ export default function LookTryOnCards({
   onSave,
   saveDisabled,
   saveLabel,
+  onSecondaryAction,
+  secondaryActionDisabled = false,
+  secondaryActionLabel,
+  secondaryActionClassName,
   onOpenImage,
 }: LookTryOnCardsProps) {
   return (
@@ -131,6 +139,17 @@ export default function LookTryOnCards({
         <Button type="button" className="w-full" onClick={onSave} disabled={saveDisabled}>
           {saveLabel}
         </Button>
+        {onSecondaryAction && secondaryActionLabel ? (
+          <Button
+            type="button"
+            variant="outline"
+            className={secondaryActionClassName}
+            onClick={onSecondaryAction}
+            disabled={secondaryActionDisabled}
+          >
+            {secondaryActionLabel}
+          </Button>
+        ) : null}
       </div>
     </div>
   );

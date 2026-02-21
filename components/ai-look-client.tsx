@@ -400,7 +400,7 @@ export default function AiLookClient() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const [activeMode, setActiveMode] = useState<AiMode>("single");
+  const [activeMode, setActiveMode] = useState<AiMode>("saved");
 
   const [prompt, setPrompt] = useState("");
   const [singleResult, setSingleResult] = useState<SingleLookResponse | null>(null);
@@ -1494,6 +1494,7 @@ export default function AiLookClient() {
     (savedLookActionQuery.length >= 2 &&
       "export look to json saved look json".includes(savedLookActionQuery));
   const showSavedLookNoActionsFound = !showSavedLookActionThresholdHint && !showExportLookJsonAction;
+  const showMainPanelCardShell = !(activeMode === "saved" && savedTabView === "list");
 
   return (
     <div className="min-h-[calc(100vh-4rem)] min-h-[calc(100dvh-4rem)] bg-slate-100 p-4 md:p-6">
@@ -1587,6 +1588,24 @@ export default function AiLookClient() {
             <button
               type="button"
               role="tab"
+              aria-selected={activeMode === "saved"}
+              aria-controls="looks-main-panel"
+              className={cn(
+                "-mb-px border-b-2 border-transparent px-1 py-2 text-sm font-medium transition",
+                activeMode === "saved"
+                  ? "border-slate-900 text-slate-900"
+                  : "text-slate-600 hover:text-slate-900"
+              )}
+              onClick={() => {
+                setActiveMode("saved");
+                setError(null);
+              }}
+            >
+              Favorite Looks
+            </button>
+            <button
+              type="button"
+              role="tab"
               aria-selected={activeMode === "single"}
               aria-controls="looks-main-panel"
               className={cn(
@@ -1601,24 +1620,6 @@ export default function AiLookClient() {
               }}
             >
               Create New Look
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeMode === "travel"}
-              aria-controls="looks-main-panel"
-              className={cn(
-                "-mb-px border-b-2 border-transparent px-1 py-2 text-sm font-medium transition",
-                activeMode === "travel"
-                  ? "border-slate-900 text-slate-900"
-                  : "text-slate-600 hover:text-slate-900"
-              )}
-              onClick={() => {
-                setActiveMode("travel");
-                setError(null);
-              }}
-            >
-              Pack for Travel
             </button>
             <button
               type="button"
@@ -1641,26 +1642,32 @@ export default function AiLookClient() {
             <button
               type="button"
               role="tab"
-              aria-selected={activeMode === "saved"}
+              aria-selected={activeMode === "travel"}
               aria-controls="looks-main-panel"
               className={cn(
                 "-mb-px border-b-2 border-transparent px-1 py-2 text-sm font-medium transition",
-                activeMode === "saved"
+                activeMode === "travel"
                   ? "border-slate-900 text-slate-900"
                   : "text-slate-600 hover:text-slate-900"
               )}
               onClick={() => {
-                setActiveMode("saved");
+                setActiveMode("travel");
                 setError(null);
               }}
             >
-              Saved Looks
+              Pack for Travel
             </button>
           </div>
         </div>
 
-        <Card>
-          <CardContent id="looks-main-panel" role="tabpanel" className="space-y-4">
+        <div
+          id="looks-main-panel"
+          role="tabpanel"
+          className={cn(
+            "space-y-4",
+            showMainPanelCardShell && "rounded-lg border bg-white p-6"
+          )}
+        >
 
             {activeMode === "single" ? (
               <form onSubmit={handleGenerateSingle} className="space-y-3">
@@ -1897,7 +1904,6 @@ export default function AiLookClient() {
               <div className="space-y-3">
                 {savedTabView === "list" ? (
                   <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Saved Looks</h3>
                     {savedLooksLoading && <span className="text-xs text-slate-500">Loading...</span>}
                   </div>
                 ) : null}
@@ -1905,107 +1911,60 @@ export default function AiLookClient() {
                 {savedPreviewLoadError && <p className="text-sm text-red-600">{savedPreviewLoadError}</p>}
                 {error && <p className="text-sm text-red-600">{error}</p>}
                 {savedTabView === "list" ? (
-                  savedLooksLoading ? (
-                    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-                      <table className="w-full text-left text-sm">
-                        <thead className="bg-slate-50">
-                          <tr className="text-xs uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-semibold">Preview</th>
-                            <th className="px-3 py-2 font-semibold">Title</th>
-                            <th className="px-3 py-2 font-semibold">Created</th>
-                            <th className="px-3 py-2 font-semibold">Location</th>
-                            <th className="px-3 py-2 text-right font-semibold">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {Array.from({ length: 4 }).map((_, index) => (
-                            <tr key={`saved-looks-table-skeleton-${index}`} className="border-t border-slate-200">
-                              <td className="px-3 py-2">
-                                <Skeleton className="h-12 w-12 rounded-md" />
-                              </td>
-                              <td className="px-3 py-2">
-                                <Skeleton className="h-4 w-40" />
-                              </td>
-                              <td className="px-3 py-2">
-                                <Skeleton className="h-4 w-36" />
-                              </td>
-                              <td className="px-3 py-2">
-                                <Skeleton className="h-4 w-28" />
-                              </td>
-                              <td className="px-3 py-2">
-                                <div className="flex justify-end">
-                                  <Skeleton className="h-9 w-9 rounded-md" />
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : savedManualLooks.length === 0 ? (
-                    <p className="text-sm text-slate-600">No saved manual looks yet.</p>
-                  ) : (
-                    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-                      <table className="w-full text-left text-sm">
-                        <thead className="bg-slate-50">
-                          <tr className="text-xs uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-semibold">Preview</th>
-                            <th className="px-3 py-2 font-semibold">Title</th>
-                            <th className="px-3 py-2 font-semibold">Created</th>
-                            <th className="px-3 py-2 font-semibold">Location</th>
-                            <th className="px-3 py-2 text-right font-semibold">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {savedManualLooks.map((savedLook) => (
-                            <tr key={savedLook.id} className="border-t border-slate-200">
-                              <td className="px-3 py-2">
-                                <div className="relative h-12 w-12 overflow-hidden rounded-md bg-slate-100">
-                                  <Image
-                                    src={savedLook.generatedImageUrl}
-                                    alt={savedLook.title}
-                                    fill
-                                    sizes="48px"
-                                    className="object-cover"
-                                  />
-                                </div>
-                              </td>
-                              <td className="px-3 py-2 align-middle">
-                                <button
-                                  type="button"
-                                  onClick={() => void handleLoadSavedLookPreview(savedLook)}
-                                  className="max-w-[220px] truncate text-left font-semibold text-slate-900 hover:underline"
-                                  disabled={savedTabBusy}
-                                >
-                                  {savedLook.title}
-                                </button>
-                              </td>
-                              <td className="px-3 py-2 align-middle text-xs text-slate-600">
-                                {new Date(savedLook.createdAt).toLocaleString()}
-                              </td>
-                              <td className="px-3 py-2 align-middle text-xs text-slate-600">
-                                {savedLook.locationLabel}
-                              </td>
-                              <td className="px-3 py-2 text-right align-middle">
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="icon"
-                                  onClick={() => void handleDeleteSavedLook(savedLook.id)}
-                                  disabled={savedTabBusy}
-                                  aria-label={`Delete ${savedLook.title}`}
-                                  title={`Delete ${savedLook.title}`}
-                                  className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
-                                >
-                                  <Trash2 />
-                                </Button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <button
+                      type="button"
+                      onClick={() => setActiveMode("single")}
+                      className="group flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-6 py-8 text-center transition hover:border-slate-400 hover:bg-slate-50"
+                      aria-label="Add new look"
+                    >
+                      <span className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full border border-slate-300 bg-white text-2xl leading-none text-slate-700 transition group-hover:border-slate-500 group-hover:text-slate-900">
+                        +
+                      </span>
+                      <p className="text-sm font-semibold text-slate-900">Add New Look</p>
+                    </button>
+
+                    {savedLooksLoading
+                      ? Array.from({ length: 5 }).map((_, index) => (
+                          <div key={`favorite-look-card-skeleton-${index}`} className="rounded-lg border bg-white px-3 py-7">
+                            <Skeleton className="mx-auto aspect-[3/4] w-[86%] rounded-md" />
+                            <div className="mt-3 flex justify-center">
+                              <Skeleton className="h-4 w-40" />
+                            </div>
+                          </div>
+                        ))
+                      : savedManualLooks.map((savedLook) => (
+                          <div key={savedLook.id} className="rounded-lg border bg-white px-3 py-7">
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() => openTryOnImageModal(savedLook.generatedImageUrl, savedLook.title)}
+                                className="relative mx-auto block aspect-[3/4] w-[86%] cursor-zoom-in overflow-hidden rounded-md bg-slate-100"
+                                aria-label={`Open ${savedLook.title} in full size`}
+                              >
+                                <Image
+                                  src={savedLook.generatedImageUrl}
+                                  alt={savedLook.title}
+                                  fill
+                                  sizes="(max-width: 1024px) 50vw, 33vw"
+                                  className="object-cover"
+                                />
+                              </button>
+                            </div>
+
+                            <div className="mt-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => void handleLoadSavedLookPreview(savedLook)}
+                                className="max-w-full cursor-pointer truncate text-sm font-normal text-slate-900 hover:underline disabled:cursor-not-allowed"
+                                disabled={savedTabBusy}
+                              >
+                                {savedLook.title}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                  </div>
                 ) : (
                   <div className="space-y-5">
                     <div className="flex items-center justify-between">
@@ -2014,7 +1973,7 @@ export default function AiLookClient() {
                         onClick={handleBackToSavedLooksList}
                         className="text-sm font-medium text-slate-700 hover:text-slate-900 hover:underline"
                       >
-                        &larr; Back to Saved Looks
+                        &larr; Back to Favorite Looks
                       </button>
                       {savedPreviewLoading ? <span className="text-xs text-slate-500">Loading preview...</span> : null}
                     </div>
@@ -2075,6 +2034,7 @@ export default function AiLookClient() {
                                 <Skeleton className="h-4 w-20" />
                                 <Skeleton className="h-9 w-full rounded-md" />
                                 <Skeleton className="h-10 w-full rounded-md" />
+                                <Skeleton className="h-10 w-full rounded-md" />
                               </div>
                             </div>
                           </div>
@@ -2130,6 +2090,14 @@ export default function AiLookClient() {
                                 savedPreviewGarments.length < 2
                               }
                               saveLabel={isSelectionLoading ? "Saving..." : "Save Look"}
+                              onSecondaryAction={
+                                savedPreviewLookId != null
+                                  ? () => void handleDeleteSavedLook(savedPreviewLookId)
+                                  : undefined
+                              }
+                              secondaryActionDisabled={savedTabBusy || savedPreviewLookId == null}
+                              secondaryActionLabel={isSelectionLoading ? "Deleting..." : "Delete Look"}
+                              secondaryActionClassName="w-full border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
                               onOpenImage={openTryOnImageModal}
                             />
                           </div>
@@ -2140,8 +2108,7 @@ export default function AiLookClient() {
                 )}
               </div>
             )}
-          </CardContent>
-        </Card>
+        </div>
 
         {activeMode === "single" && isSingleLoading && (
           <Card>
