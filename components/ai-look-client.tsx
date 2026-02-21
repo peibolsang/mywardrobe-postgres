@@ -11,6 +11,14 @@ import { Input } from "@/components/ui/input";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import LookTryOnCards, { type LookDetailsSummary } from "@/components/look-try-on-cards";
 import {
   DropdownMenu,
@@ -30,7 +38,7 @@ import {
 } from "@/lib/manual-look-selection";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Trash2 } from "lucide-react";
+import { Code2, Copy, Plus, Trash2 } from "lucide-react";
 
 interface LookGarment {
   id: number;
@@ -432,6 +440,11 @@ export default function AiLookClient() {
   const [savedPreviewContext, setSavedPreviewContext] = useState<ManualTryOnContext | null>(null);
   const [savedPreviewTitle, setSavedPreviewTitle] = useState("");
   const [savedPreviewLoadError, setSavedPreviewLoadError] = useState<string | null>(null);
+  const [isSavedLookActionsOpen, setIsSavedLookActionsOpen] = useState(false);
+  const [savedLookActionsSearchValue, setSavedLookActionsSearchValue] = useState("");
+  const [savedLookActionsDebouncedSearchValue, setSavedLookActionsDebouncedSearchValue] = useState("");
+  const [savedLookActionsView, setSavedLookActionsView] = useState<"search" | "export-json">("search");
+  const [isSavedLookJsonCopied, setIsSavedLookJsonCopied] = useState(false);
   const [expandedTryOnImageUrl, setExpandedTryOnImageUrl] = useState<string | null>(null);
   const [expandedTryOnImageAlt, setExpandedTryOnImageAlt] = useState("Try-on image");
 
@@ -471,6 +484,10 @@ export default function AiLookClient() {
   const lookDetails = useMemo(() => summarizeLook(selectionGarments), [selectionGarments]);
   const singleTryOnLookDetails = useMemo(() => summarizeLook(singleTryOnGarments), [singleTryOnGarments]);
   const savedPreviewLookDetails = useMemo(() => summarizeLook(savedPreviewGarments), [savedPreviewGarments]);
+  const selectedSavedLook = useMemo(
+    () => savedManualLooks.find((look) => look.id === savedPreviewLookId) ?? null,
+    [savedManualLooks, savedPreviewLookId]
+  );
 
   const getTryOnErrorMessage = (payload: ManualTryOnErrorResponse | null): string => {
     if (payload?.errorCode === "PROFILE_BODY_PHOTO_REQUIRED") {
@@ -674,6 +691,65 @@ export default function AiLookClient() {
     }
     void loadSavedManualLooks();
   }, [activeMode]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setSavedLookActionsDebouncedSearchValue(savedLookActionsSearchValue);
+    }, 120);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [savedLookActionsSearchValue]);
+
+  useEffect(() => {
+    if (!isSavedLookJsonCopied) return;
+    const timeoutId = window.setTimeout(() => {
+      setIsSavedLookJsonCopied(false);
+    }, 1400);
+    return () => window.clearTimeout(timeoutId);
+  }, [isSavedLookJsonCopied]);
+
+  useEffect(() => {
+    const isSavedDetailMode = activeMode === "saved" && savedTabView === "detail";
+    if (!isSavedDetailMode) return;
+
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "k" || (!event.metaKey && !event.ctrlKey)) return;
+      const target = event.target as HTMLElement | null;
+      const isTypingTarget = !!target?.closest("input, textarea, select, [contenteditable=\"true\"]");
+      if (isTypingTarget) return;
+      event.preventDefault();
+      setIsSavedLookActionsOpen((previous) => !previous);
+    };
+
+    window.addEventListener("keydown", handleKeydown);
+    return () => window.removeEventListener("keydown", handleKeydown);
+  }, [activeMode, savedTabView]);
+
+  useEffect(() => {
+    if (!isSavedLookActionsOpen) return;
+    if (savedLookActionsView !== "search") return;
+
+    const handleActionHotkeys = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (savedLookActionsSearchValue.trim().length > 0) return;
+      if (event.key !== "J") return;
+      event.preventDefault();
+      setSavedLookActionsView("export-json");
+      setSavedLookActionsSearchValue("");
+      setIsSavedLookJsonCopied(false);
+    };
+
+    window.addEventListener("keydown", handleActionHotkeys);
+    return () => window.removeEventListener("keydown", handleActionHotkeys);
+  }, [isSavedLookActionsOpen, savedLookActionsSearchValue, savedLookActionsView]);
+
+  useEffect(() => {
+    if (activeMode === "saved" && savedTabView === "detail") return;
+    setIsSavedLookActionsOpen(false);
+    setSavedLookActionsSearchValue("");
+    setSavedLookActionsView("search");
+    setIsSavedLookJsonCopied(false);
+  }, [activeMode, savedTabView]);
 
   const handleClearAnchor = () => {
     const nextParams = new URLSearchParams(searchParams.toString());
@@ -1330,8 +1406,181 @@ export default function AiLookClient() {
     setTravelFeedbackStatuses({});
   };
 
+  const handleOpenSavedLookJson = () => {
+    setSavedLookActionsView("export-json");
+    setSavedLookActionsSearchValue("");
+    setIsSavedLookJsonCopied(false);
+  };
+
+  const handleBackToSavedLookActionSearch = () => {
+    setSavedLookActionsView("search");
+    setSavedLookActionsSearchValue("");
+    setIsSavedLookJsonCopied(false);
+  };
+
+  const savedLookExportJson = useMemo(() => {
+    const garmentIds = savedPreviewGarments.map((garment) => garment.id);
+    const fallbackGarmentIds = selectedSavedLook?.garmentIds ?? [];
+    const context = savedPreviewContext
+      ? {
+          locationLabel: savedPreviewContext.locationLabel,
+          weatherSummary: savedPreviewContext.weatherSummary,
+          weatherSource: savedPreviewContext.weatherSource,
+        }
+      : selectedSavedLook
+        ? {
+            locationLabel: selectedSavedLook.locationLabel,
+            weatherSummary: selectedSavedLook.weatherSummary,
+            weatherSource: selectedSavedLook.weatherSource,
+          }
+        : null;
+
+    return JSON.stringify(
+      {
+        id: selectedSavedLook?.id ?? savedPreviewLookId ?? null,
+        title: savedPreviewTitle || selectedSavedLook?.title || "",
+        garmentIds: garmentIds.length > 0 ? garmentIds : fallbackGarmentIds,
+        garments: savedPreviewGarments.map((garment) => ({
+          id: garment.id,
+          model: garment.model,
+          brand: garment.brand,
+          type: garment.type,
+          file_name: garment.file_name,
+        })),
+        generatedImageUrl: savedPreviewImageUrl || selectedSavedLook?.generatedImageUrl || "",
+        context,
+        createdAt: selectedSavedLook?.createdAt ?? null,
+        updatedAt: selectedSavedLook?.updatedAt ?? null,
+      },
+      null,
+      2
+    );
+  }, [
+    savedPreviewGarments,
+    savedPreviewContext,
+    savedPreviewImageUrl,
+    savedPreviewLookId,
+    savedPreviewTitle,
+    selectedSavedLook,
+  ]);
+
+  const handleCopySavedLookJson = async () => {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(savedLookExportJson);
+      } else if (typeof document !== "undefined") {
+        const tempArea = document.createElement("textarea");
+        tempArea.value = savedLookExportJson;
+        tempArea.setAttribute("readonly", "true");
+        tempArea.style.position = "absolute";
+        tempArea.style.left = "-9999px";
+        document.body.appendChild(tempArea);
+        tempArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(tempArea);
+      }
+      setIsSavedLookJsonCopied(true);
+    } catch (copyError) {
+      console.error("Failed to copy saved look JSON:", copyError);
+      toast.error("Failed to copy saved look JSON.");
+    }
+  };
+
+  const savedLookActionQuery = savedLookActionsDebouncedSearchValue.trim().toLowerCase();
+  const showSavedLookActionThresholdHint =
+    savedLookActionsSearchValue.trim().length > 0 && savedLookActionsSearchValue.trim().length < 2;
+  const showExportLookJsonAction =
+    !savedLookActionQuery ||
+    (savedLookActionQuery.length >= 2 &&
+      "export look to json saved look json".includes(savedLookActionQuery));
+  const showSavedLookNoActionsFound = !showSavedLookActionThresholdHint && !showExportLookJsonAction;
+
   return (
     <div className="min-h-[calc(100vh-4rem)] min-h-[calc(100dvh-4rem)] bg-slate-100 p-4 md:p-6">
+      <CommandDialog
+        open={isSavedLookActionsOpen}
+        onOpenChange={(open) => {
+          setIsSavedLookActionsOpen(open);
+          if (!open) {
+            setSavedLookActionsSearchValue("");
+            setSavedLookActionsView("search");
+            setIsSavedLookJsonCopied(false);
+          }
+        }}
+        title="Saved Look Actions"
+        description="Run actions for this saved look."
+        className="max-w-md"
+      >
+        {savedLookActionsView === "search" ? (
+          <>
+            <CommandInput
+              placeholder="Search actions... (J = Export JSON)"
+              value={savedLookActionsSearchValue}
+              onValueChange={setSavedLookActionsSearchValue}
+            />
+            <CommandList>
+              {showSavedLookActionThresholdHint ? (
+                <p className="py-6 text-center text-sm text-gray-600">Type at least 2 characters</p>
+              ) : (
+                <CommandEmpty>No actions found</CommandEmpty>
+              )}
+              {showExportLookJsonAction ? (
+                <CommandGroup heading="Actions">
+                  <CommandItem
+                    value="Export Look to JSON"
+                    keywords={["export", "look", "json", "saved"]}
+                    onSelect={handleOpenSavedLookJson}
+                  >
+                    <div className="flex w-full items-center justify-between gap-3">
+                      <span className="inline-flex min-w-0 items-center gap-2 text-sm text-gray-800">
+                        <Code2 className="size-4 shrink-0 text-gray-500" />
+                        <span className="truncate">Export Look to JSON</span>
+                      </span>
+                      <span className="rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                        J
+                      </span>
+                    </div>
+                  </CommandItem>
+                </CommandGroup>
+              ) : null}
+              {showSavedLookNoActionsFound && null}
+            </CommandList>
+          </>
+        ) : (
+          <div className="h-[300px] bg-gray-50 p-3">
+            <div className="flex h-full flex-col">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={handleBackToSavedLookActionSearch}
+                  className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                  aria-label="Back to action search"
+                  title="Back"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCopySavedLookJson()}
+                  className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                  aria-label="Copy saved look JSON to clipboard"
+                  title="Copy"
+                >
+                  <Copy className="size-3.5" />
+                  {isSavedLookJsonCopied ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <textarea
+                readOnly
+                value={savedLookExportJson}
+                className="min-h-0 w-full flex-1 resize-y rounded-md border border-gray-300 bg-white p-2 font-mono text-xs text-gray-800"
+                aria-label="Saved look JSON export"
+              />
+            </div>
+          </div>
+        )}
+      </CommandDialog>
+
       <div className="mx-auto w-full max-w-6xl space-y-6">
         <div className="border-b border-slate-300">
           <div role="tablist" aria-label="Looks modes" className="flex items-end gap-6">
@@ -1760,10 +2009,13 @@ export default function AiLookClient() {
                 ) : (
                   <div className="space-y-5">
                     <div className="flex items-center justify-between">
-                      <Button type="button" variant="outline" onClick={handleBackToSavedLooksList}>
-                        <ArrowLeft className="mr-2 h-4 w-4" />
-                        Back to Saved Looks
-                      </Button>
+                      <button
+                        type="button"
+                        onClick={handleBackToSavedLooksList}
+                        className="text-sm font-medium text-slate-700 hover:text-slate-900 hover:underline"
+                      >
+                        &larr; Back to Saved Looks
+                      </button>
                       {savedPreviewLoading ? <span className="text-xs text-slate-500">Loading preview...</span> : null}
                     </div>
                     {savedPreviewLoading ? (
