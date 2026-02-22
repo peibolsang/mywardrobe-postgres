@@ -47,6 +47,37 @@ const parseFilterValues = (value: string | string[] | undefined): string[] => {
   return [];
 };
 
+const viewerTypePriority = [
+  // Top parts
+  'jacket',
+  'overcoat',
+  'parka',
+  'sport coat',
+  'cardigan',
+  'jumper',
+  'sweatshirt',
+  'sweater',
+  'overshirt',
+  'shirt',
+  'polo shirt',
+  't-shirt',
+  // Pants
+  'selvedge jeans',
+  'jeans',
+  'pants',
+  'shorts',
+  // Footwear
+  'boots',
+  'chelsea boots',
+  'shoes',
+  'loafers',
+  'sneakers',
+] as const;
+
+const viewerTypePriorityMap: Map<string, number> = new Map(
+  viewerTypePriority.map((typeName, index) => [typeName, index])
+);
+
 export default async function WardrobeViewerPage({
   searchParams,
 }: {
@@ -82,18 +113,18 @@ export default async function WardrobeViewerPage({
 
   try {
     const wardrobeJson = await getWardrobeData();
-    const bodyPartOrder = ['Jacket', 'Sweatshirt', 'Shirt', 'Polo Shirt', 'T-shirt', 'Blazer', 'Selvedge Jeans', 'Jeans', 'Pants', 'Shorts', 'Loafers', 'Sneakers'];
-
     const sortedWardrobe = [...wardrobeJson].sort((a, b) => {
-      const indexA = bodyPartOrder.indexOf(a.type);
-      const indexB = bodyPartOrder.indexOf(b.type);
+      const normalizedTypeA = a.type.trim().toLowerCase();
+      const normalizedTypeB = b.type.trim().toLowerCase();
+      const indexA = viewerTypePriorityMap.get(normalizedTypeA) ?? Number.POSITIVE_INFINITY;
+      const indexB = viewerTypePriorityMap.get(normalizedTypeB) ?? Number.POSITIVE_INFINITY;
 
-      // Handle types not in the defined order (place them at the end)
-      if (indexA === -1 && indexB === -1) return 0;
-      if (indexA === -1) return 1;
-      if (indexB === -1) return -1;
+      if (indexA !== indexB) return indexA - indexB;
 
-      return indexA - indexB;
+      const modelCompare = a.model.localeCompare(b.model, undefined, { sensitivity: 'base' });
+      if (modelCompare !== 0) return modelCompare;
+
+      return a.id - b.id;
     });
     wardrobeData = sortedWardrobe;
 
