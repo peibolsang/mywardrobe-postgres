@@ -18,6 +18,7 @@ const PROFILE_BODY_PHOTO_REQUIRED = "PROFILE_BODY_PHOTO_REQUIRED";
 
 const tryOnRequestSchema = z.object({
   garmentIds: z.array(z.number().int().positive()).min(2).max(8),
+  stream: z.boolean().optional(),
 }).strict();
 
 type WeatherContext = {
@@ -34,6 +35,7 @@ type InMemoryRateState = {
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 8;
 const inMemoryRate = new Map<string, InMemoryRateState>();
+const INTERNAL_DELEGATE_TOKENS = new Set<string>();
 
 const normalize = (value: unknown): string => String(value ?? "").trim();
 
@@ -281,21 +283,27 @@ const generateImageBytesWithReference = async ({
 };
 
 export async function POST(request: Request) {
-  const requestId = randomUUID();
+  const forwardedRequestId = request.headers.get("x-try-on-request-id");
+  const requestId = forwardedRequestId?.trim() ? forwardedRequestId : randomUUID();
+  const internalDelegateToken = request.headers.get("x-try-on-internal-delegate-token");
+  const isInternalDelegate =
+    typeof internalDelegateToken === "string" &&
+    internalDelegateToken.length > 0 &&
+    INTERNAL_DELEGATE_TOKENS.delete(internalDelegateToken);
   const responseJson = (body: Record<string, unknown>, init?: { status: number }) =>
     NextResponse.json({ requestId, ...body }, init);
 
   try {
-    if (!isAllowedOrigin(request)) {
+    if (!isInternalDelegate && !isAllowedOrigin(request)) {
       return responseJson({ error: "Invalid request origin." }, { status: 403 });
     }
 
-    if (!(await isOwnerSession())) {
+    if (!isInternalDelegate && !(await isOwnerSession())) {
       return responseJson({ error: "Forbidden" }, { status: 403 });
     }
 
     const ownerKey = getOwnerKey();
-    if (isRateLimited(ownerKey)) {
+    if (!isInternalDelegate && isRateLimited(ownerKey)) {
       return responseJson({ error: "Too many requests. Please wait and try again." }, { status: 429 });
     }
 
@@ -303,6 +311,140 @@ export async function POST(request: Request) {
     const parsed = tryOnRequestSchema.safeParse(rawBody);
     if (!parsed.success) {
       return responseJson({ error: "Invalid try-on payload." }, { status: 400 });
+    }
+
+    if (!isInternalDelegate && parsed.data.stream === true) {
+      const encoder = new TextEncoder();
+      const headers = new Headers({
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+      });
+      const progressSteps = [
+        { stepKey: "selection", label: "Preparing your selected garments" },
+        { stepKey: "profile", label: "Checking your profile photo and context" },
+        { stepKey: "prompt", label: "Composing the try-on prompt" },
+        { stepKey: "rendering", label: "Rendering your try-on image" },
+        { stepKey: "finalizing", label: "Finalizing your try-on result" },
+      ] as const;
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const writeEvent = (payload: Record<string, unknown>) => {
+            controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`));
+          };
+          const now = () => new Date().toISOString();
+          const writeProgress = (step: (typeof progressSteps)[number]) => {
+            writeEvent({
+              type: "progress",
+              requestId,
+              ts: now(),
+              stepKey: step.stepKey,
+              label: step.label,
+            });
+          };
+
+          writeEvent({
+            type: "meta",
+            requestId,
+            ts: now(),
+            phase: "started",
+          });
+
+          let stepIndex = 0;
+          let finalizingFollowUpTimeout: ReturnType<typeof setTimeout> | null = null;
+          writeProgress(progressSteps[stepIndex]);
+
+          const stepInterval = setInterval(() => {
+            if (stepIndex < progressSteps.length - 2) {
+              stepIndex += 1;
+              writeProgress(progressSteps[stepIndex]);
+              if (stepIndex === progressSteps.length - 2) {
+                finalizingFollowUpTimeout = setTimeout(() => {
+                  writeEvent({
+                    type: "progress",
+                    requestId,
+                    ts: now(),
+                    stepKey: "rendering",
+                    label: "Applying final image refinements",
+                  });
+                }, 4800);
+              }
+              return;
+            }
+          }, 1700);
+
+          const delegateToken = randomUUID();
+          INTERNAL_DELEGATE_TOKENS.add(delegateToken);
+
+          const closeStream = () => {
+            clearInterval(stepInterval);
+            if (finalizingFollowUpTimeout) {
+              clearTimeout(finalizingFollowUpTimeout);
+              finalizingFollowUpTimeout = null;
+            }
+            controller.close();
+          };
+
+          void (async () => {
+            try {
+              const delegatedBody = {
+                ...parsed.data,
+                stream: false,
+              };
+              const delegatedHeaders = new Headers(request.headers);
+              delegatedHeaders.set("content-type", "application/json");
+              delegatedHeaders.set("x-try-on-internal-delegate-token", delegateToken);
+              delegatedHeaders.set("x-try-on-request-id", requestId);
+              const delegatedResponse = await POST(
+                new Request(request.url, {
+                  method: "POST",
+                  headers: delegatedHeaders,
+                  body: JSON.stringify(delegatedBody),
+                })
+              );
+
+              const delegatedPayload = await delegatedResponse.json().catch(() => null) as
+                | { error?: unknown }
+                | null;
+              if (!delegatedResponse.ok) {
+                writeEvent({
+                  type: "error",
+                  requestId,
+                  ts: now(),
+                  status: delegatedResponse.status,
+                  error:
+                    typeof delegatedPayload?.error === "string"
+                      ? delegatedPayload.error
+                      : "Failed to generate try-on image.",
+                });
+                return;
+              }
+
+              writeProgress(progressSteps[progressSteps.length - 1]);
+              writeEvent({
+                type: "result",
+                requestId,
+                ts: now(),
+                data: delegatedPayload,
+              });
+            } catch (error) {
+              console.error("[manual-look][try-on][stream][delegate-failed]", { requestId, error });
+              writeEvent({
+                type: "error",
+                requestId,
+                ts: now(),
+                status: 500,
+                error: "Failed to generate try-on image.",
+              });
+            } finally {
+              INTERNAL_DELEGATE_TOKENS.delete(delegateToken);
+              closeStream();
+            }
+          })();
+        },
+      });
+
+      return new Response(stream, { status: 200, headers });
     }
 
     const garmentIds = toCanonicalIds(parsed.data.garmentIds);

@@ -30,6 +30,7 @@ const singleLookRequestSchema = z.object({
   anchorGarmentId: z.coerce.number().int().positive().optional(),
   anchorMode: z.enum(["strict", "soft"]).optional(),
   selectedTools: z.array(singleSelectedToolSchema).max(8).optional(),
+  stream: z.boolean().optional(),
 });
 
 const travelRequestSchema = z.object({
@@ -38,6 +39,7 @@ const travelRequestSchema = z.object({
   startDate: z.string().trim().min(1, "Start date is required."),
   endDate: z.string().trim().min(1, "End date is required."),
   reason: z.enum(["Vacation", "Office", "Customer visit"]),
+  stream: z.boolean().optional(),
 });
 
 const contextIntentSchema = z.object({
@@ -4771,8 +4773,16 @@ const isAllowedOrigin = (request: Request): boolean => {
   return origin === requestOrigin;
 };
 
+const INTERNAL_DELEGATE_TOKENS = new Set<string>();
+
 export async function POST(request: Request) {
-  const requestId = randomUUID();
+  const forwardedRequestId = request.headers.get("x-looks-request-id");
+  const requestId = forwardedRequestId?.trim() ? forwardedRequestId : randomUUID();
+  const internalDelegateToken = request.headers.get("x-looks-internal-delegate-token");
+  const isInternalDelegate =
+    typeof internalDelegateToken === "string" &&
+    internalDelegateToken.length > 0 &&
+    INTERNAL_DELEGATE_TOKENS.delete(internalDelegateToken);
   const toErrorDetails = (error: unknown) => {
     if (error instanceof Error) {
       return AI_LOOK_DEBUG
@@ -4801,21 +4811,23 @@ export async function POST(request: Request) {
   ) => NextResponse.json({ requestId, ...body }, init);
 
   try {
-    logInfo(
-      "[ai-look][request][received]",
-      {
-        method: request.method,
-        path: new URL(request.url).pathname,
-      },
-      { debugOnly: false }
-    );
+    if (!isInternalDelegate) {
+      logInfo(
+        "[ai-look][request][received]",
+        {
+          method: request.method,
+          path: new URL(request.url).pathname,
+        },
+        { debugOnly: false }
+      );
+    }
 
-    if (!isAllowedOrigin(request)) {
+    if (!isInternalDelegate && !isAllowedOrigin(request)) {
       logWarn("[ai-look][request][rejected-origin]", { reason: "invalid-origin" });
       return responseJson({ error: "Invalid request origin." }, { status: 403 });
     }
 
-    if (!(await isOwnerSession())) {
+    if (!isInternalDelegate && !(await isOwnerSession())) {
       logWarn("[ai-look][request][rejected-auth]", { reason: "owner-session-required" });
       return responseJson({ error: "Forbidden" }, { status: 403 });
     }
@@ -4829,12 +4841,289 @@ export async function POST(request: Request) {
     }
 
     const ownerRateLimitKey = getOwnerKey();
-    if (await isRateLimited(ownerRateLimitKey)) {
+    if (!isInternalDelegate && await isRateLimited(ownerRateLimitKey)) {
       logWarn("[ai-look][request][rate-limited]", { ownerRateLimitKey });
       return responseJson(
         { error: "Too many Looks requests. Please wait and try again." },
         { status: 429 }
       );
+    }
+
+    if (!isInternalDelegate && parsedTravelBody.success && parsedTravelBody.data.stream === true) {
+      const encoder = new TextEncoder();
+      const headers = new Headers({
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+      });
+      const progressSteps = [
+        { stepKey: "trip_context", label: "Understanding your trip request" },
+        { stepKey: "weather_enrichment", label: "Checking destination weather" },
+        { stepKey: "day_planning", label: "Planning day-by-day outfits" },
+        { stepKey: "constraints", label: "Balancing repeats and constraints" },
+        { stepKey: "finalizing", label: "Finalizing your travel plan" },
+      ] as const;
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const writeEvent = (payload: Record<string, unknown>) => {
+            controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`));
+          };
+          const now = () => new Date().toISOString();
+          const writeProgress = (step: (typeof progressSteps)[number]) => {
+            writeEvent({
+              type: "progress",
+              requestId,
+              ts: now(),
+              stepKey: step.stepKey,
+              label: step.label,
+            });
+          };
+
+          writeEvent({
+            type: "meta",
+            requestId,
+            ts: now(),
+            phase: "started",
+          });
+
+          let stepIndex = 0;
+          let finalizingFollowUpTimeout: ReturnType<typeof setTimeout> | null = null;
+          writeProgress(progressSteps[stepIndex]);
+
+          const stepInterval = setInterval(() => {
+            if (stepIndex < progressSteps.length - 2) {
+              stepIndex += 1;
+              writeProgress(progressSteps[stepIndex]);
+              if (stepIndex === progressSteps.length - 2) {
+                finalizingFollowUpTimeout = setTimeout(() => {
+                  writeEvent({
+                    type: "progress",
+                    requestId,
+                    ts: now(),
+                    stepKey: "constraints",
+                    label: "Running final day checks",
+                  });
+                }, 5000);
+              }
+              return;
+            }
+          }, 1700);
+
+          const delegateToken = randomUUID();
+          INTERNAL_DELEGATE_TOKENS.add(delegateToken);
+
+          const closeStream = () => {
+            clearInterval(stepInterval);
+            if (finalizingFollowUpTimeout) {
+              clearTimeout(finalizingFollowUpTimeout);
+              finalizingFollowUpTimeout = null;
+            }
+            controller.close();
+          };
+
+          void (async () => {
+            try {
+              const delegatedBody = {
+                ...parsedTravelBody.data,
+                stream: false,
+              };
+              const delegatedHeaders = new Headers(request.headers);
+              delegatedHeaders.set("content-type", "application/json");
+              delegatedHeaders.set("x-looks-internal-delegate-token", delegateToken);
+              delegatedHeaders.set("x-looks-request-id", requestId);
+              const delegatedResponse = await POST(
+                new Request(request.url, {
+                  method: "POST",
+                  headers: delegatedHeaders,
+                  body: JSON.stringify(delegatedBody),
+                })
+              );
+
+              const delegatedPayload = await delegatedResponse.json().catch(() => null) as
+                | { error?: unknown }
+                | null;
+
+              if (!delegatedResponse.ok) {
+                writeEvent({
+                  type: "error",
+                  requestId,
+                  ts: now(),
+                  status: delegatedResponse.status,
+                  error:
+                    typeof delegatedPayload?.error === "string"
+                      ? delegatedPayload.error
+                      : "Failed to generate travel packing looks.",
+                });
+                return;
+              }
+
+              writeProgress(progressSteps[progressSteps.length - 1]);
+              writeEvent({
+                type: "result",
+                requestId,
+                ts: now(),
+                data: delegatedPayload,
+              });
+            } catch (error) {
+              logError("[ai-look][travel][stream][delegate-failed]", {
+                error: toErrorDetails(error),
+              });
+              writeEvent({
+                type: "error",
+                requestId,
+                ts: now(),
+                status: 500,
+                error: "Failed to generate travel packing looks.",
+              });
+            } finally {
+              INTERNAL_DELEGATE_TOKENS.delete(delegateToken);
+              closeStream();
+            }
+          })();
+        },
+      });
+
+      return new Response(stream, { status: 200, headers });
+    }
+
+    if (!isInternalDelegate && parsedSingleBody.success && parsedSingleBody.data.stream === true) {
+      const encoder = new TextEncoder();
+      const headers = new Headers({
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+      });
+      const progressSteps = [
+        { stepKey: "understand_request", label: "Understanding your request" },
+        { stepKey: "weather_context", label: "Checking weather and context" },
+        { stepKey: "style_tools", label: "Applying your selected tools" },
+        { stepKey: "wardrobe_checks", label: "Checking wardrobe compatibility" },
+        { stepKey: "candidate_generation", label: "Trying outfit options" },
+        { stepKey: "ranking", label: "Ranking the best option" },
+        { stepKey: "finalizing", label: "Finalizing your look" },
+      ] as const;
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const writeEvent = (payload: Record<string, unknown>) => {
+            controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`));
+          };
+          const now = () => new Date().toISOString();
+          const writeProgress = (step: (typeof progressSteps)[number]) => {
+            writeEvent({
+              type: "progress",
+              requestId,
+              ts: now(),
+              stepKey: step.stepKey,
+              label: step.label,
+            });
+          };
+
+          writeEvent({
+            type: "meta",
+            requestId,
+            ts: now(),
+            phase: "started",
+          });
+
+          let stepIndex = 0;
+          let rankingFollowUpTimeout: ReturnType<typeof setTimeout> | null = null;
+          writeProgress(progressSteps[stepIndex]);
+
+          const stepInterval = setInterval(() => {
+            if (stepIndex < progressSteps.length - 2) {
+              stepIndex += 1;
+              writeProgress(progressSteps[stepIndex]);
+              if (stepIndex === progressSteps.length - 2) {
+                // Keep the ranking phase calm: emit only one follow-up hint if it runs long.
+                rankingFollowUpTimeout = setTimeout(() => {
+                  writeEvent({
+                    type: "progress",
+                    requestId,
+                    ts: now(),
+                    stepKey: "ranking",
+                    label: "Final checks in progress",
+                  });
+                }, 4500);
+              }
+              return;
+            }
+          }, 1600);
+
+          const delegateToken = randomUUID();
+          INTERNAL_DELEGATE_TOKENS.add(delegateToken);
+
+          const closeStream = () => {
+            clearInterval(stepInterval);
+            if (rankingFollowUpTimeout) {
+              clearTimeout(rankingFollowUpTimeout);
+              rankingFollowUpTimeout = null;
+            }
+            controller.close();
+          };
+
+          void (async () => {
+            try {
+              const delegatedBody = {
+                ...parsedSingleBody.data,
+                stream: false,
+              };
+              const delegatedHeaders = new Headers(request.headers);
+              delegatedHeaders.set("content-type", "application/json");
+              delegatedHeaders.set("x-looks-internal-delegate-token", delegateToken);
+              delegatedHeaders.set("x-looks-request-id", requestId);
+              const delegatedResponse = await POST(
+                new Request(request.url, {
+                  method: "POST",
+                  headers: delegatedHeaders,
+                  body: JSON.stringify(delegatedBody),
+                })
+              );
+
+              const delegatedPayload = await delegatedResponse.json().catch(() => null) as
+                | { error?: unknown }
+                | null;
+
+              if (!delegatedResponse.ok) {
+                writeEvent({
+                  type: "error",
+                  requestId,
+                  ts: now(),
+                  status: delegatedResponse.status,
+                  error:
+                    typeof delegatedPayload?.error === "string"
+                      ? delegatedPayload.error
+                      : "Failed to generate a look.",
+                });
+                return;
+              }
+
+              writeProgress(progressSteps[progressSteps.length - 1]);
+              writeEvent({
+                type: "result",
+                requestId,
+                ts: now(),
+                data: delegatedPayload,
+              });
+            } catch (error) {
+              logError("[ai-look][single][stream][delegate-failed]", {
+                error: toErrorDetails(error),
+              });
+              writeEvent({
+                type: "error",
+                requestId,
+                ts: now(),
+                status: 500,
+                error: "Failed to generate a look.",
+              });
+            } finally {
+              INTERNAL_DELEGATE_TOKENS.delete(delegateToken);
+              closeStream();
+            }
+          })();
+        },
+      });
+
+      return new Response(stream, { status: 200, headers });
     }
 
     const wardrobeData = await getWardrobeData({ forceFresh: true });

@@ -261,3 +261,24 @@
 - Mobile tabs note: `/looks` top navigation now renders icon-only tabs on mobile (Favorite/New Idea/Changing Room/Travel) with `aria-label` accessibility, while desktop keeps text labels.
 - Mobile nav affordance note: Increased mobile menu trigger (shirt icon) to profile-sized control (`h-10 w-10`) with larger icon (`h-5 w-5`) for visual parity and easier tap target.
 - Mobile nav layout note: Moved the t-shirt menu trigger into the right-side user control cluster next to profile and enlarged it (`h-11 w-11`, icon `h-6 w-6`) for clearer prominence and tapability.
+
+## 2026-02-23
+- Context: User requested onboarding by reading `AGENT_NOTES.md` and `AGENTS.md`.
+- What went right: Reviewed both documents end-to-end before making assumptions, then aligned on current routes (`/looks`, `/api/looks`) and owner-first security boundaries.
+- Operational reminder: For future edits, keep `AGENTS.md` in sync whenever architecture/data-model/auth behavior changes, and continue appending concise session learnings here.
+- Context: User requested Codex-style in-flight status for `New Look Idea` single-look generation.
+- What went right: Added opt-in single-mode streaming (`stream: true`) using NDJSON events (`meta/progress/result/error`) and client incremental parsing for compact inline progress updates.
+- Constraint-handling note: Kept existing non-stream JSON behavior unchanged for compatibility and left travel/manual modes untouched to avoid cross-mode regressions.
+- What went wrong: Initial stream progress stalled visually at `Ranking the best option` because timer-based updates intentionally stopped at the penultimate step while backend work continued.
+- Correction applied: Continued emitting rotating ranking-phase follow-up status labels during long wait windows so users keep seeing forward motion before final result.
+- UX follow-up: Rotating follow-up labels created too much text churn; adjusted stream pacing to slower step cadence and a single delayed ranking follow-up (`Final checks in progress`) to keep the status easier to read.
+- UI follow-up: Moved single-look status into its own card between prompt/results, kept it visible after success with fixed `Done` text, and constrained dot animation to in-flight streaming only.
+- UI refinement: Removed nested status-card wrappers and kept a single white status card with gray-status dot styling, while preserving blink-only-during-stream behavior and fixed dot when done.
+- UI refinement: Removed the separate single-look status card entirely; streaming status now appears as the loading result-card title, and final state naturally switches to look-name title when result renders.
+- UI refinement: Added status dots directly in result-card titles: animated gray dot during streaming title updates and fixed gray dot for completed look title.
+- UI refinement: Updated title color states so streaming status text is gray, while completed look title and completed dot use black for stronger final-state contrast.
+- UI refinement: Synced streaming title text pulse animation with the streaming dot so both blink together in matching gray tones during in-flight updates.
+- Travel streaming note: Extended NDJSON streaming (`stream: true`) to `mode: "travel"` and wired travel loading-card title to live progress text with the same pulse style used in single mode; final travel title remains canonical once done.
+- Changing Room loading UX note: Added a dedicated `Try-on Result` skeleton in Selection mode that mirrors the final 3-panel layout (image, look details, title/save panel) while `Try on me` generation is in flight.
+- Changing Room streaming note: Replaced static `Try-on Result` loading heading with server-streamed live status text from `/api/looks/manual/try-on` (`stream: true` NDJSON), including pulsing gray dot/text while loading and fixed black dot/title when complete.
+- Single try-on streaming note: Applied the same streamed-status pattern to `New Look Idea` `Try on me` (live `Try-on Result` heading + matching 3-panel skeleton while loading), then fixed black-dot `Try-on Result` title once generation finishes.

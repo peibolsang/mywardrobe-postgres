@@ -75,8 +75,13 @@ Use imperative commit subjects.
 5. Profile page (`/profile`) is route-guarded server-side (owner-only), hydrates owner defaults + body photo + style preferences + saved references, and persists via `/api/profile`, `/api/profile/body-photo`, `/api/profile/styles`, and `/api/profile/references`.
 6. AI look page (`/looks`) is route-guarded server-side and renders a client UI with four tabs: (a) `Favorite Looks` (default), (b) free-text single-look generation (`New Look Idea`), (c) "Pack for Travel" planning, and (d) `Changing Room` manual look mode.
    - Single-look prompt includes an `Add Tool` control that lets the user attach explicit `Style` and `Reference` selections as removable chips per request.
+   - `New Look Idea` now uses the loading result card title as live streaming status text; once generation completes, the final result card title is the generated look name.
 7. `/api/looks` supports two modes: default single-look mode and `mode: "travel"` for per-day trip planning.
+   - Single-look and travel requests optionally accept `stream: true`; when enabled, response is NDJSON (`application/x-ndjson`) with event types `meta | progress | result | error`.
+   - Streaming progress now keeps status updates calmer: step transitions are slower and long ranking windows emit at most one follow-up hint (`Final checks in progress`) instead of frequent rotating labels.
+   - In `Pack for Travel`, loading result-card title now streams live progress text (same lightweight status model used by single-look), then resolves to the final travel-plan title when generation completes.
    - Manual Selection APIs are separate owner-only endpoints: `/api/looks/manual/try-on` and `/api/looks/manual/saved` (`GET`/`POST`/`PATCH`/`DELETE`).
+   - `POST /api/looks/manual/try-on` now also supports optional `stream: true` NDJSON progress events (`meta | progress | result | error`) used by both `Changing Room` and `New Look Idea` `Try on me` loading title updates.
    - `/api/looks/manual/try-on` requires `user_profile.body_photo_url`; if missing, it returns 422 with `errorCode: PROFILE_BODY_PHOTO_REQUIRED`.
 8. Single-look mode uses a two-step agent flow: (a) free-text intent normalization into canonical wardrobe vocab, then (b) multi-candidate look generation constrained to wardrobe IDs, followed by server-side validation, normalization, reranking, and one final look selection.
    - Step 1 is context-first (`weather`, `occasion`, `place`, `timeOfDay`, `notes`); server deterministically derives `formality`, `style`, and material targets from context + structured weather profile before Step 2.
@@ -89,6 +94,7 @@ Use imperative commit subjects.
 1. Single-look interpretation: `/api/looks` maps free-text input into canonical wardrobe intent (`weather`, `occasion`, `place`, `timeOfDay`, `formality`, `style`) via structured output; the model can tool-call `getWeatherByLocation` for live weather context.
    - Single-look weather location resolution priority is `prompt location > profile default location > no-location fallback`; prompt date parsing is intentionally not used in single-look mode.
    - Single-look request payload now optionally accepts `selectedTools` (`[{ type: "style" | "reference", id: string }]`) from the AI Look `Add Tool` UI.
+   - Single-look request payload also optionally accepts `stream: true` for progress streaming; final payload shape in `result` event remains the same as non-stream JSON mode.
    - Directive merge precedence is deterministic: hard safety/context constraints first, then tool-selected directives, then free-text directives, then derived-profile fallback.
    - Tool-selected formality bias now takes precedence over derived formality in single-look profile merge.
   - Style directives are sourced from DB-backed style catalog records (aliases + directive payload) rather than hardcoded runtime dictionaries.

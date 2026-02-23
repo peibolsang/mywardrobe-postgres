@@ -101,6 +101,17 @@ interface SingleLookResponse {
   weatherContextStatus?: "not_requested" | "location_detected" | "fetched" | "failed";
 }
 
+interface LooksStreamEvent {
+  type: "meta" | "progress" | "result" | "error";
+  requestId?: string;
+  ts?: string;
+  stepKey?: string;
+  label?: string;
+  data?: unknown;
+  error?: string;
+  status?: number;
+}
+
 interface TravelDayResult {
   date: string;
   lookName: string;
@@ -430,6 +441,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
   const [singleTryOnImageUrl, setSingleTryOnImageUrl] = useState<string | null>(null);
   const [singleTryOnContext, setSingleTryOnContext] = useState<ManualTryOnContext | null>(null);
   const [isSingleTryOnLoading, setIsSingleTryOnLoading] = useState(false);
+  const [singleTryOnStatusText, setSingleTryOnStatusText] = useState<string | null>(null);
   const [singleTryOnSaving, setSingleTryOnSaving] = useState(false);
   const [singleTryOnGarmentIds, setSingleTryOnGarmentIds] = useState<number[]>([]);
   const [singleTryOnGarments, setSingleTryOnGarments] = useState<LookGarment[]>([]);
@@ -461,6 +473,9 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMode, setLoadingMode] = useState<AiMode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [singleStatusText, setSingleStatusText] = useState<string | null>(null);
+  const [travelStatusText, setTravelStatusText] = useState<string | null>(null);
+  const [selectionTryOnStatusText, setSelectionTryOnStatusText] = useState<string | null>(null);
   const [singleFeedbackVote, setSingleFeedbackVote] = useState<FeedbackVote | null>(null);
   const [singleFeedbackReason, setSingleFeedbackReason] = useState("");
   const [singleFeedbackStatus, setSingleFeedbackStatus] = useState<FeedbackStatus>("idle");
@@ -488,6 +503,8 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
   const isSingleLoading = isLoading && loadingMode === "single";
   const isTravelLoading = isLoading && loadingMode === "travel";
   const isSelectionLoading = isLoading && loadingMode === "selection";
+  const isSelectionTryOnLoading = isSelectionLoading && Boolean(selectionTryOnStatusText);
+  const isSingleTryOnStreaming = isSingleTryOnLoading && Boolean(singleTryOnStatusText);
   const primaryLook = singleResult?.primaryLook ?? null;
   const selectionActionBusy = isSelectionLoading || isSingleTryOnLoading;
   const savedTabBusy = selectionActionBusy || savedPreviewLoading;
@@ -985,6 +1002,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     setIsLoading(true);
     setLoadingMode("single");
     setError(null);
+    setSingleStatusText("Understanding your request");
     setSingleResult(null);
     setTravelResult(null);
     setSingleFeedbackVote(null);
@@ -992,6 +1010,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     setSingleFeedbackStatus("idle");
     setSingleTryOnImageUrl(null);
     setSingleTryOnContext(null);
+    setSingleTryOnStatusText(null);
     setSingleTryOnGarmentIds([]);
     setSingleTryOnGarments([]);
     setSingleTryOnLookTitle("");
@@ -1013,8 +1032,97 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
       const response = await fetch("/api/looks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, stream: true }),
       });
+
+      const contentType = response.headers.get("content-type") || "";
+      const isNdjson = contentType.includes("application/x-ndjson");
+
+      if (isNdjson && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalPayload: unknown = null;
+        let streamedError: string | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+
+            let event: LooksStreamEvent | null = null;
+            try {
+              event = JSON.parse(line) as LooksStreamEvent;
+            } catch {
+              continue;
+            }
+
+            if (event.type === "progress" && typeof event.label === "string" && event.label.trim()) {
+              setSingleStatusText(event.label.trim());
+              continue;
+            }
+
+            if (event.type === "error") {
+              streamedError = typeof event.error === "string" && event.error.trim()
+                ? event.error
+                : "Failed to generate a look.";
+              break;
+            }
+
+            if (event.type === "result") {
+              finalPayload = event.data ?? null;
+            }
+          }
+
+          if (streamedError) break;
+        }
+
+        if (!streamedError && buffer.trim()) {
+          try {
+            const trailingEvent = JSON.parse(buffer.trim()) as LooksStreamEvent;
+            if (trailingEvent.type === "error") {
+              streamedError =
+                typeof trailingEvent.error === "string" && trailingEvent.error.trim()
+                  ? trailingEvent.error
+                  : "Failed to generate a look.";
+            } else if (trailingEvent.type === "result") {
+              finalPayload = trailingEvent.data ?? null;
+            } else if (
+              trailingEvent.type === "progress" &&
+              typeof trailingEvent.label === "string" &&
+              trailingEvent.label.trim()
+            ) {
+              setSingleStatusText(trailingEvent.label.trim());
+            }
+          } catch {
+            // Ignore malformed trailing chunk.
+          }
+        }
+
+        if (streamedError) {
+          setError(streamedError);
+          setSingleResult(null);
+          return;
+        }
+
+        const parsed = parseSingleLookResponse(finalPayload);
+        if (!parsed) {
+          setError("No look was generated. Please refine your prompt.");
+          setSingleResult(null);
+          return;
+        }
+
+        setSingleResult(parsed);
+        setTravelResult(null);
+        setSingleStatusText(null);
+        return;
+      }
 
       const data = await response.json();
       if (!response.ok) {
@@ -1032,6 +1140,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
 
       setSingleResult(parsed);
       setTravelResult(null);
+      setSingleStatusText(null);
     } catch {
       setError("Unexpected network error while generating the look.");
       setSingleResult(null);
@@ -1060,6 +1169,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     setIsLoading(true);
     setLoadingMode("travel");
     setError(null);
+    setTravelStatusText("Understanding your trip request");
     setTravelResult(null);
     setSingleResult(null);
     setTravelFeedbackVotes({});
@@ -1076,8 +1186,98 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
           startDate,
           endDate,
           reason,
+          stream: true,
         }),
       });
+
+      const contentType = response.headers.get("content-type") || "";
+      const isNdjson = contentType.includes("application/x-ndjson");
+
+      if (isNdjson && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalPayload: unknown = null;
+        let streamedError: string | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+
+            let event: LooksStreamEvent | null = null;
+            try {
+              event = JSON.parse(line) as LooksStreamEvent;
+            } catch {
+              continue;
+            }
+
+            if (event.type === "progress" && typeof event.label === "string" && event.label.trim()) {
+              setTravelStatusText(event.label.trim());
+              continue;
+            }
+
+            if (event.type === "error") {
+              streamedError = typeof event.error === "string" && event.error.trim()
+                ? event.error
+                : "Failed to generate travel packing looks.";
+              break;
+            }
+
+            if (event.type === "result") {
+              finalPayload = event.data ?? null;
+            }
+          }
+
+          if (streamedError) break;
+        }
+
+        if (!streamedError && buffer.trim()) {
+          try {
+            const trailingEvent = JSON.parse(buffer.trim()) as LooksStreamEvent;
+            if (trailingEvent.type === "error") {
+              streamedError =
+                typeof trailingEvent.error === "string" && trailingEvent.error.trim()
+                  ? trailingEvent.error
+                  : "Failed to generate travel packing looks.";
+            } else if (trailingEvent.type === "result") {
+              finalPayload = trailingEvent.data ?? null;
+            } else if (
+              trailingEvent.type === "progress" &&
+              typeof trailingEvent.label === "string" &&
+              trailingEvent.label.trim()
+            ) {
+              setTravelStatusText(trailingEvent.label.trim());
+            }
+          } catch {
+            // Ignore malformed trailing chunk.
+          }
+        }
+
+        if (streamedError) {
+          setError(streamedError);
+          setTravelResult(null);
+          return;
+        }
+
+        const parsed = finalPayload as TravelPlanResponse | null;
+        if (!parsed || typeof parsed !== "object" || parsed.mode !== "travel" || !Array.isArray(parsed.days)) {
+          setError("No travel plan was generated. Please refine your details.");
+          setTravelResult(null);
+          return;
+        }
+
+        setTravelResult(parsed);
+        setSingleResult(null);
+        setTravelStatusText(null);
+        return;
+      }
 
       const data = await response.json();
       if (!response.ok) {
@@ -1088,6 +1288,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
 
       setTravelResult(data as TravelPlanResponse);
       setSingleResult(null);
+      setTravelStatusText(null);
     } catch {
       setError("Unexpected network error while generating travel looks.");
       setTravelResult(null);
@@ -1110,6 +1311,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     setSelectionGarments([]);
     setManualTryOnImageUrl(null);
     setManualTryOnContext(null);
+    setSelectionTryOnStatusText(null);
     setManualLookTitle("");
     setSelectionLoadError(null);
   };
@@ -1123,6 +1325,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     setIsLoading(true);
     setLoadingMode("selection");
     setError(null);
+    setSelectionTryOnStatusText("Preparing your selected garments");
     setManualTryOnImageUrl(null);
     setManualTryOnContext(null);
 
@@ -1132,8 +1335,104 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           garmentIds: selectionIds,
+          stream: true,
         }),
       });
+
+      const contentType = response.headers.get("content-type") || "";
+      const isNdjson = contentType.includes("application/x-ndjson");
+
+      if (isNdjson && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalPayload: (ManualTryOnErrorResponse & Partial<ManualTryOnResponse>) | null = null;
+        let streamedError: string | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+
+            let event: LooksStreamEvent | null = null;
+            try {
+              event = JSON.parse(line) as LooksStreamEvent;
+            } catch {
+              continue;
+            }
+
+            if (event.type === "progress" && typeof event.label === "string" && event.label.trim()) {
+              setSelectionTryOnStatusText(event.label.trim());
+              continue;
+            }
+
+            if (event.type === "error") {
+              streamedError = typeof event.error === "string" && event.error.trim()
+                ? event.error
+                : "Failed to generate try-on image.";
+              break;
+            }
+
+            if (event.type === "result") {
+              finalPayload = (event.data as ManualTryOnErrorResponse & Partial<ManualTryOnResponse>) ?? null;
+            }
+          }
+
+          if (streamedError) break;
+        }
+
+        if (!streamedError && buffer.trim()) {
+          try {
+            const trailingEvent = JSON.parse(buffer.trim()) as LooksStreamEvent;
+            if (trailingEvent.type === "error") {
+              streamedError =
+                typeof trailingEvent.error === "string" && trailingEvent.error.trim()
+                  ? trailingEvent.error
+                  : "Failed to generate try-on image.";
+            } else if (trailingEvent.type === "result") {
+              finalPayload = (trailingEvent.data as ManualTryOnErrorResponse & Partial<ManualTryOnResponse>) ?? null;
+            } else if (
+              trailingEvent.type === "progress" &&
+              typeof trailingEvent.label === "string" &&
+              trailingEvent.label.trim()
+            ) {
+              setSelectionTryOnStatusText(trailingEvent.label.trim());
+            }
+          } catch {
+            // Ignore malformed trailing chunk.
+          }
+        }
+
+        if (streamedError) {
+          setError(streamedError);
+          return;
+        }
+
+        const payload = finalPayload;
+        if (!payload) {
+          setError("Try-on response was incomplete.");
+          return;
+        }
+
+        if (!payload.generatedImageUrl || !payload.context) {
+          setError("Try-on response was incomplete.");
+          return;
+        }
+
+        setManualTryOnImageUrl(payload.generatedImageUrl);
+        setManualTryOnContext(payload.context);
+        if (!manualLookTitle.trim()) {
+          setManualLookTitle(`Manual Look - ${new Date().toISOString().slice(0, 10)}`);
+        }
+        setSelectionTryOnStatusText(null);
+        return;
+      }
 
       const payload = await response.json() as ManualTryOnErrorResponse & Partial<ManualTryOnResponse>;
       if (!response.ok) {
@@ -1151,6 +1450,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
       if (!manualLookTitle.trim()) {
         setManualLookTitle(`Manual Look - ${new Date().toISOString().slice(0, 10)}`);
       }
+      setSelectionTryOnStatusText(null);
     } catch {
       setError("Unexpected network error while generating the try-on image.");
     } finally {
@@ -1170,6 +1470,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     setError(null);
     setSingleTryOnImageUrl(null);
     setSingleTryOnContext(null);
+    setSingleTryOnStatusText("Preparing your selected garments");
     setSingleTryOnGarmentIds(lineupIds);
     setSingleTryOnLookTitle(primaryLook.lookName || `Look - ${new Date().toISOString().slice(0, 10)}`);
 
@@ -1186,8 +1487,101 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           garmentIds: lineupIds,
+          stream: true,
         }),
       });
+
+      const contentType = response.headers.get("content-type") || "";
+      const isNdjson = contentType.includes("application/x-ndjson");
+
+      if (isNdjson && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalPayload: (ManualTryOnErrorResponse & Partial<ManualTryOnResponse>) | null = null;
+        let streamedError: string | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+
+            let event: LooksStreamEvent | null = null;
+            try {
+              event = JSON.parse(line) as LooksStreamEvent;
+            } catch {
+              continue;
+            }
+
+            if (event.type === "progress" && typeof event.label === "string" && event.label.trim()) {
+              setSingleTryOnStatusText(event.label.trim());
+              continue;
+            }
+
+            if (event.type === "error") {
+              streamedError = typeof event.error === "string" && event.error.trim()
+                ? event.error
+                : "Failed to generate try-on image.";
+              break;
+            }
+
+            if (event.type === "result") {
+              finalPayload = (event.data as ManualTryOnErrorResponse & Partial<ManualTryOnResponse>) ?? null;
+            }
+          }
+
+          if (streamedError) break;
+        }
+
+        if (!streamedError && buffer.trim()) {
+          try {
+            const trailingEvent = JSON.parse(buffer.trim()) as LooksStreamEvent;
+            if (trailingEvent.type === "error") {
+              streamedError =
+                typeof trailingEvent.error === "string" && trailingEvent.error.trim()
+                  ? trailingEvent.error
+                  : "Failed to generate try-on image.";
+            } else if (trailingEvent.type === "result") {
+              finalPayload = (trailingEvent.data as ManualTryOnErrorResponse & Partial<ManualTryOnResponse>) ?? null;
+            } else if (
+              trailingEvent.type === "progress" &&
+              typeof trailingEvent.label === "string" &&
+              trailingEvent.label.trim()
+            ) {
+              setSingleTryOnStatusText(trailingEvent.label.trim());
+            }
+          } catch {
+            // Ignore malformed trailing chunk.
+          }
+        }
+
+        if (streamedError) {
+          setError(streamedError);
+          return;
+        }
+
+        const payload = finalPayload;
+        if (!payload) {
+          setError("Try-on response was incomplete.");
+          return;
+        }
+
+        if (!payload.generatedImageUrl || !payload.context) {
+          setError("Try-on response was incomplete.");
+          return;
+        }
+
+        setSingleTryOnImageUrl(payload.generatedImageUrl);
+        setSingleTryOnContext(payload.context);
+        setSingleTryOnStatusText(null);
+        return;
+      }
 
       const payload = await response.json() as ManualTryOnErrorResponse & Partial<ManualTryOnResponse>;
       if (!response.ok) {
@@ -1202,6 +1596,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
 
       setSingleTryOnImageUrl(payload.generatedImageUrl);
       setSingleTryOnContext(payload.context);
+      setSingleTryOnStatusText(null);
     } catch {
       setError("Unexpected network error while generating the try-on image.");
     } finally {
@@ -1424,6 +1819,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     setPrompt("");
     setSelectedTools([]);
     setError(null);
+    setSingleStatusText(null);
     setSingleResult(null);
     setSingleFeedbackVote(null);
     setSingleFeedbackReason("");
@@ -1446,6 +1842,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
     setEndDate("");
     setReason("Vacation");
     setError(null);
+    setTravelStatusText(null);
     setTravelResult(null);
     setTravelFeedbackVotes({});
     setTravelFeedbackReasons({});
@@ -2036,9 +2433,55 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                   </div>
                 )}
 
-                {manualTryOnImageUrl && (
+                {isSelectionTryOnLoading ? (
                   <div className="space-y-3">
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Try-on Result</h3>
+                    <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
+                      <span className="inline-block h-2.5 w-2.5 rounded-full animate-pulse bg-slate-500" aria-hidden="true" />
+                      <span className="animate-pulse text-slate-600">{selectionTryOnStatusText || "Building try-on result..."}</span>
+                    </h3>
+                    <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)_minmax(0,1fr)]">
+                      <div className="rounded-lg border bg-white p-3">
+                        <Skeleton className="h-[440px] w-full rounded-md" />
+                      </div>
+                      <div className="rounded-lg border bg-white p-4">
+                        <div className="space-y-4">
+                          <Skeleton className="h-4 w-28" />
+                          <Skeleton className="h-4 w-16" />
+                          <div className="flex flex-wrap gap-2">
+                            <Skeleton className="h-6 w-20 rounded-full" />
+                            <Skeleton className="h-6 w-24 rounded-full" />
+                          </div>
+                          <Skeleton className="h-4 w-20" />
+                          <div className="flex flex-wrap gap-2">
+                            <Skeleton className="h-6 w-28 rounded-full" />
+                          </div>
+                          <Skeleton className="h-4 w-28" />
+                          <div className="flex flex-wrap gap-2">
+                            <Skeleton className="h-6 w-36 rounded-full" />
+                            <Skeleton className="h-6 w-32 rounded-full" />
+                          </div>
+                          <Skeleton className="h-4 w-32" />
+                          <div className="flex flex-wrap gap-2">
+                            <Skeleton className="h-6 w-40 rounded-full" />
+                            <Skeleton className="h-6 w-28 rounded-full" />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="rounded-lg border bg-white p-4">
+                        <div className="space-y-3">
+                          <Skeleton className="h-4 w-20" />
+                          <Skeleton className="h-9 w-full rounded-md" />
+                          <Skeleton className="h-10 w-full rounded-md" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : manualTryOnImageUrl ? (
+                  <div className="space-y-3">
+                    <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
+                      <span className="inline-block h-2.5 w-2.5 rounded-full bg-slate-900" aria-hidden="true" />
+                      <span className="text-slate-900">Try-on Result</span>
+                    </h3>
                     <LookTryOnCards
                       imageUrl={manualTryOnImageUrl}
                       imageAlt="Generated manual look try-on"
@@ -2051,7 +2494,7 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                       onOpenImage={openTryOnImageModal}
                     />
                   </div>
-                )}
+                ) : null}
 
               </div>
             ) : (
@@ -2283,8 +2726,9 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
         {activeMode === "single" && isSingleLoading && (
           <Card>
             <CardHeader>
-              <CardTitle>
-                <Skeleton className="h-7 w-72" />
+              <CardTitle className="flex items-center gap-2">
+                <span className="inline-block h-2.5 w-2.5 rounded-full animate-pulse bg-slate-500" aria-hidden="true" />
+                <span className="animate-pulse text-slate-600">{singleStatusText || "Generating look..."}</span>
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-5">
@@ -2341,7 +2785,10 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
         {activeMode === "single" && singleResult && primaryLook && !isSingleLoading && (
           <Card>
             <CardHeader>
-              <CardTitle>{primaryLook.lookName}</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <span className="inline-block h-2.5 w-2.5 rounded-full bg-slate-900" aria-hidden="true" />
+                <span className="text-slate-900">{primaryLook.lookName}</span>
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-5">
               <Accordion type="single" collapsible className="w-full rounded-lg border border-amber-200 bg-amber-50 px-4">
@@ -2414,7 +2861,19 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
 
               <div className="space-y-3 rounded-lg border bg-white p-4">
                 <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Try-on Preview</h3>
+                  {isSingleTryOnStreaming ? (
+                    <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
+                      <span className="inline-block h-2.5 w-2.5 rounded-full animate-pulse bg-slate-500" aria-hidden="true" />
+                      <span className="animate-pulse text-slate-600">{singleTryOnStatusText || "Building try-on result..."}</span>
+                    </h3>
+                  ) : singleTryOnImageUrl ? (
+                    <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
+                      <span className="inline-block h-2.5 w-2.5 rounded-full bg-slate-900" aria-hidden="true" />
+                      <span className="text-slate-900">Try-on Result</span>
+                    </h3>
+                  ) : (
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Try-on Result</h3>
+                  )}
                   <Button
                     type="button"
                     onClick={() => void handleTryOnSingleLook()}
@@ -2423,7 +2882,44 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
                     {isSingleTryOnLoading ? "Generating..." : "Try on me"}
                   </Button>
                 </div>
-                {singleTryOnImageUrl ? (
+                {isSingleTryOnStreaming ? (
+                  <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)_minmax(0,1fr)]">
+                    <div className="rounded-lg border bg-white p-3">
+                      <Skeleton className="h-[440px] w-full rounded-md" />
+                    </div>
+                    <div className="rounded-lg border bg-white p-4">
+                      <div className="space-y-4">
+                        <Skeleton className="h-4 w-28" />
+                        <Skeleton className="h-4 w-16" />
+                        <div className="flex flex-wrap gap-2">
+                          <Skeleton className="h-6 w-20 rounded-full" />
+                          <Skeleton className="h-6 w-24 rounded-full" />
+                        </div>
+                        <Skeleton className="h-4 w-20" />
+                        <div className="flex flex-wrap gap-2">
+                          <Skeleton className="h-6 w-28 rounded-full" />
+                        </div>
+                        <Skeleton className="h-4 w-28" />
+                        <div className="flex flex-wrap gap-2">
+                          <Skeleton className="h-6 w-36 rounded-full" />
+                          <Skeleton className="h-6 w-32 rounded-full" />
+                        </div>
+                        <Skeleton className="h-4 w-32" />
+                        <div className="flex flex-wrap gap-2">
+                          <Skeleton className="h-6 w-40 rounded-full" />
+                          <Skeleton className="h-6 w-28 rounded-full" />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-lg border bg-white p-4">
+                      <div className="space-y-3">
+                        <Skeleton className="h-4 w-20" />
+                        <Skeleton className="h-9 w-full rounded-md" />
+                        <Skeleton className="h-10 w-full rounded-md" />
+                      </div>
+                    </div>
+                  </div>
+                ) : singleTryOnImageUrl ? (
                   <LookTryOnCards
                     imageUrl={singleTryOnImageUrl}
                     imageAlt="Generated try-on preview"
@@ -2509,8 +3005,9 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
         {activeMode === "travel" && isTravelLoading && (
           <Card>
             <CardHeader>
-              <CardTitle>
-                <Skeleton className="h-7 w-64" />
+              <CardTitle className="flex items-center gap-2">
+                <span className="inline-block h-2.5 w-2.5 rounded-full animate-pulse bg-slate-500" aria-hidden="true" />
+                <span className="animate-pulse text-slate-600">{travelStatusText || "Building travel plan..."}</span>
               </CardTitle>
               <CardDescription>
                 <Skeleton className="h-4 w-72" />
@@ -2576,7 +3073,10 @@ export default function AiLookClient({ initialSavedLookId = null }: AiLookClient
         {activeMode === "travel" && travelResult && !isTravelLoading && (
           <Card>
             <CardHeader>
-              <CardTitle>Travel Plan for {travelResult.destination}</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <span className="inline-block h-2.5 w-2.5 rounded-full bg-slate-900" aria-hidden="true" />
+                <span className="text-slate-900">Travel Plan for {travelResult.destination}</span>
+              </CardTitle>
               <CardDescription>
                 {travelResult.startDate} to {travelResult.endDate} · {travelResult.reason} · {travelResult.summary.generatedLooks}/
                 {travelResult.summary.requestedDays} looks generated
